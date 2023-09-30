@@ -1,0 +1,5 @@
+{
+  "executable": "C:\\cc65\\bin\\cl65",
+  "input": "sources\\legion_main.s",
+  "params": "--verbose --target nes -o legion_main.nes"
+}
