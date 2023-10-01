@@ -12,8 +12,8 @@
 ; bg.s
 ;.global draw_bg
 
-; player.s
-;.global init_player, move_player, draw_player_sprite
+ ;player.s
+.global init_player, move_player, draw_player_sprite
 
 ; ppuclear.s
 .global ppu_clear_nt, ppu_clear_oam, ppu_screen_on

@@ -17,9 +17,7 @@ OAM = $0200
 
 .segment "ZEROPAGE"
 nmis:          .res 1
-oam_used:      .res 1  ; starts at 0
-cur_keys:      .res 2
-new_keys:      .res 2
+current_oam:   .res 1  ; starts at 0
 
 .segment "CODE"
 ;;
@@ -58,23 +56,23 @@ new_keys:      .res 2
   ;jsr draw_bg
   
   ; Set up game variables, as if it were the start of a new level.
-  ;jsr init_player
+  jsr init_player
 
 forever:
 
   ; Game logic
   jsr read_pads
-  ;jsr move_player
+  jsr update_player
 
   ; The first entry in OAM (indices 0-3) is "sprite 0".  In games
   ; with a scrolling playfield and a still status bar, it's used to
   ; help split the screen.  This demo doesn't use scrolling, but
   ; yours might, so I'm marking the first entry used anyway.  
   ldx #4
-  stx oam_used
+  stx current_oam
   ; adds to oam_used
-  ;jsr draw_player_sprite
-  ldx oam_used
+  jsr draw_player_sprite
+  ldx current_oam
   jsr ppu_clear_oam
 
 

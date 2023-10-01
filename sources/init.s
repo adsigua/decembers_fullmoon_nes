@@ -3,11 +3,30 @@
 .export reset_handler
 
 
-.proc reset_handler
+.proc reset_handler 
+
+  lda #$01  
+  lda #$00
+  sta $0010
+  testLoop:
+    lda $0010
+    sec
+    sbc #4
+    cmp #256-105
+    bcs :+
+      lda #256-105
+    :
+    sta $0010
+    lda $0011  ; Set the facing direction to flipped
+    ora #$40
+    sta $0011
+    jmp testLoop
+
   ; The very first thing to do when powering on is to put all sources
   ; of interrupts into a known state.
   sei             ; Disable interrupts
   cld
+  
   ldx #$00
   stx PPUCTRL     ; Disable NMI and set VRAM increment to 32
   stx PPUMASK     ; Disable rendering

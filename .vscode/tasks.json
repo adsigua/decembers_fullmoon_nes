@@ -2,18 +2,19 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"type": "ca65",
+			"type": "process",
 			"problemMatcher": [
 				"$ca65",
 				"$ld65",
 				"$ld65-unresolved",
 				"$ld65-config"
 			],
+			"command": "build.bat",
 			"group": {
 				"kind": "build",
 				"isDefault": true
 			},
-			"label": "ca65: Build without config"
+			"label": "Build nes rom"
 		}
 	]
 }

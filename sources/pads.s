@@ -1,8 +1,11 @@
 .export read_pads
-.importzp cur_keys, new_keys
 
 JOY1      = $4016
 JOY2      = $4017
+
+.segment "ZEROPAGE"
+cur_keys:      .res 2
+new_keys:      .res 2
 
 ; turn USE_DAS on to enable autorepeat support
 .ifndef USE_DAS
