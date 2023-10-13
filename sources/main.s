@@ -5,99 +5,101 @@
   .byte "NES", $1A      ; iNES header identifier    ;.byte $4E, $45, $53, $1A   'NES' string then eof ascii
   .byte 2               ; 2x 16KB PRG code    (size of prg)
   .byte 1               ; 1x  8KB CHR data    (size of chr/sprites)
-  .byte $00, $00        ; mapper 0, vertical mirroring  flag 6-7
+  .byte $01, $00        ; mapper 0, vertical mirroring  flag 6-7
   .byte $00, $00, $00 ; mapper, vs/playchoice | prgRam size (extension) | tvSystem | tvSystem, prgRam Presence
   .byte "ADO S" ; padding, 5 bytes, filled as a signature
 
 .segment "VECTORS"
-.addr nmi_handler, reset_handler, irq_handler
+.word nmi_handler
+.word reset_handler
+.word irq_handler
 
 .segment "STARTUP"
 OAM = $0200
 
 .segment "ZEROPAGE"
-nmis:          .res 1
-current_oam:   .res 1  ; starts at 0
+varSpace:       .res 16
+
+nmi_count:      .res 1
+oam_counter:    .res 2
+oam_buffer:     .res 4
+;oam_used:   .res 2  ; starts at 0
 
 .segment "CODE"
 ;;
-; This NMI handler is good enough for a simple "has NMI occurred?"
-; vblank-detect loop.  But sometimes there are things that you always
-; want to happen every frame, even if the game logic takes far longer
-; than usual.  These might include music or a scroll split.  In these
-; cases, you'll need to put more logic into the NMI handler.
-.proc nmi_handler
-  inc nmis
-  rti
-.endproc
-
-; A null IRQ handler that just does RTI is useful to add breakpoints
-; that survive a recompile.  Set your debugging emulator to trap on
-; reads of $FFFE, and then you can BRK $00 whenever you need to add
-; a breakpoint.
-;
-; But sometimes you'll want a non-null IRQ handler.
-; On NROM, the IRQ handler is mostly used for the DMC IRQ, which was
-; designed for gapless playback of sampled sounds but can also be
-; (ab)used as a crude timer for a scroll split (e.g. status bar).
 .proc irq_handler
   rti
 .endproc
 
+.proc nmi_handler
+  pha
+  txa
+  pha
+  tya
+  pha
+  inc nmi_count
+  pla
+  tay
+  pla
+  tax
+  pla
+  rti
+
+  rti
+.endproc
+
 .proc main
-
-  ; Now the PPU has stabilized, and we're still in vblank.  Copy the
-  ; palette right now because if you load a palette during forced
-  ; blank (not vblank), it'll be visible as a rainbow streak.
   jsr load_main_palette
-
-  ; While in forced blank we have full access to VRAM.
-  ; Load the nametable (background map).
-  ;jsr draw_bg
+  jsr draw_bg
   
   ; Set up game variables, as if it were the start of a new level.
-  jsr init_player
+  jsr init_entities
+  jsr init_scroll
 
-forever:
-
-  ; Game logic
-  jsr read_pads
-  jsr update_player
-
-  ; The first entry in OAM (indices 0-3) is "sprite 0".  In games
-  ; with a scrolling playfield and a still status bar, it's used to
-  ; help split the screen.  This demo doesn't use scrolling, but
-  ; yours might, so I'm marking the first entry used anyway.  
-  ldx #4
-  stx current_oam
-  ; adds to oam_used
-  jsr draw_player_sprite
-  ldx current_oam
   jsr ppu_clear_oam
 
+  lda #%10010100	; Enable NMI (specifically enable generation of an interrupt at vblank interval)
+  sta PPUCTRL     ; store it on PPUCTRL
+  lda #%00011110	; Enable sprite rendering, bit 5 on PPUMASK
+  sta $2001       ; PPUMASK
 
-  ; Good; we have the full screen ready.  Wait for a vertical blank
-  ; and set the scroll registers to display it.
-  lda nmis
-vw3:
-  cmp nmis
-  beq vw3
+@game_loop:
+  ;read inputs
+  jsr read_pads
+
+  ; The first entry in OAM (indices 0-3) is "sprite 0".
+  ; lda #$ff
+  ; sta OAM+1
+  lda #%00100000
+  sta OAM+2
+  lda #4
+  sta oam_counter
+
+  ;do updating player updates
+  jsr update_player
+  jsr update_entities
+  jsr check_update_bg_scroll
+
+  ;clear oam for later
+  ldx oam_counter
+
+  lda nmi_count
+@check_nmi_loop:
+  cmp nmi_count
+  beq @check_nmi_loop
   
+
   ; Copy the display list from main RAM to the PPU
   lda #0
   sta OAMADDR
   lda #>OAM
   sta OAM_DMA
-  
-  ; Turn the screen on
-  ldx #0
-  ldy #0
-  lda #VBLANK_NMI|BG_0000|OBJ_1000
-  sec
-  jsr ppu_screen_on
-  jmp forever
 
-; And that's all there is to it.
+  jsr draw_column
+  jsr update_scroll
+
+  jmp @game_loop
+  rts
 .endproc
 
 .proc load_main_palette
@@ -116,10 +118,29 @@ copypalloop:
 .endproc
 
 .segment "RODATA"
+identity_table:
+    .byte $00,$01,$02,$03,$04,$05,$06,$07,$08,$09,$0a,$0b,$0c,$0d,$0e,$0f
+    .byte $10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1a,$1b,$1c,$1d,$1e,$1f
+    .byte $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$2a,$2b,$2c,$2d,$2e,$2f
+    .byte $30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$3a,$3b,$3c,$3d,$3e,$3f
+    .byte $40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$4a,$4b,$4c,$4d,$4e,$4f
+    .byte $50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$5a,$5b,$5c,$5d,$5e,$5f
+    .byte $60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$6a,$6b,$6c,$6d,$6e,$6f
+    .byte $70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$7a,$7b,$7c,$7d,$7e,$7f
+    .byte $80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$8a,$8b,$8c,$8d,$8e,$8f
+    .byte $90,$91,$92,$93,$94,$95,$96,$97,$98,$99,$9a,$9b,$9c,$9d,$9e,$9f
+    .byte $a0,$a1,$a2,$a3,$a4,$a5,$a6,$a7,$a8,$a9,$aa,$ab,$ac,$ad,$ae,$af
+    .byte $b0,$b1,$b2,$b3,$b4,$b5,$b6,$b7,$b8,$b9,$ba,$bb,$bc,$bd,$be,$bf
+    .byte $c0,$c1,$c2,$c3,$c4,$c5,$c6,$c7,$c8,$c9,$ca,$cb,$cc,$cd,$ce,$cf
+    .byte $d0,$d1,$d2,$d3,$d4,$d5,$d6,$d7,$d8,$d9,$da,$db,$dc,$dd,$de,$df
+    .byte $e0,$e1,$e2,$e3,$e4,$e5,$e6,$e7,$e8,$e9,$ea,$eb,$ec,$ed,$ee,$ef
+    .byte $f0,$f1,$f2,$f3,$f4,$f5,$f6,$f7,$f8,$f9,$fa,$fb,$fc,$fd,$fe,$ff
+    
 initial_palette:
-  .byt $22,$18,$28,$38,$0F,$06,$16,$26,$0F,$08,$19,$2A,$0F,$02,$12,$22
-  .byt $22,$08,$16,$37,$0F,$06,$16,$26,$0F,$0A,$1A,$2A,$0F,$02,$12,$22
+  ;.byte $0F,$08,$19,$2A,  $11,$0c,$1c,$2c,  $11,$01,$1c,$31,   $0F,$02,$12,$22
+  .byte $11,$0c,$1c,$2c,   $11,$01,$1c,$31,  $0F,$08,$19,$2A,  $0F,$02,$12,$22
+  .byte $11,$07,$1B,$37,   $0F,$06,$16,$26,  $0F,$0A,$1A,$2A,  $0F,$02,$12,$22
 
 ; Include the CHR ROM data
 .segment "CHARS"
-  .incbin "../obj/legion.chr"
+  .incbin "../obj/decembersfullmoon.chr"

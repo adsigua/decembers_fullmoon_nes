@@ -11,7 +11,6 @@
 ; @param X base address of nametable ($20, $24, $28, or $2C)
 ; @param Y attribute value ($00, $55, $AA, or $FF)
 .proc ppu_clear_nt
-
   ; Set base PPU address to XX00
   stx PPUADDR
   ldx #$00

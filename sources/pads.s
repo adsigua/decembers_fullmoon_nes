@@ -1,4 +1,4 @@
-.export read_pads
+.export read_pads, cur_keys, new_keys
 
 JOY1      = $4016
 JOY2      = $4017

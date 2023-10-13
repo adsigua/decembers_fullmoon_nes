@@ -2,43 +2,35 @@
 .include "global.inc"
 .export reset_handler
 
-
 .proc reset_handler 
-
-  lda #$01  
-  lda #$00
-  sta $0010
-  testLoop:
-    lda $0010
-    sec
-    sbc #4
-    cmp #256-105
-    bcs :+
-      lda #256-105
-    :
-    sta $0010
-    lda $0011  ; Set the facing direction to flipped
-    ora #$40
-    sta $0011
-    jmp testLoop
-
   ; The very first thing to do when powering on is to put all sources
   ; of interrupts into a known state.
-  sei             ; Disable interrupts
-  cld
-  
-  ldx #$00
-  stx PPUCTRL     ; Disable NMI and set VRAM increment to 32
-  stx PPUMASK     ; Disable rendering
-  stx $4010       ; Disable DMC IRQ
-  dex             ; Subtracting 1 from $00 gives $FF, which is a
-  txs             ; quick way to set the stack pointer to $01FF
-  bit PPUSTATUS   ; Acknowledge stray vblank NMI across reset
-  bit SNDCHN      ; Acknowledge DMC IRQ
-  lda #$40
-  sta JOY2          ; Disable APU Frame IRQ
-  lda #$0F
-  sta SNDCHN      ; Disable DMC playback, initialize other channels
+ 
+  sei		; disable IRQs
+  cld		; disable decimal mode
+  ldx PPUCTRL
+  ldx #$40  ; disable sound irq temporarily
+  stx $4017	; disable APU frame IRQ (disable interrupts)
+  ldx #$ff 	; Set up stack
+  txs		;  transfer x ($ff) to stack pointer
+  inx		; now X = 0 
+  stx $2000	  ; setup PPUCTRL, disable non-maskable interrupt (NMI bit7=0) (VPHB SINN)
+  stx $2001 	; disable rendering | PPU mask (BGRs bMmG)
+  stx $4010 	; disable DMC_freq IRQs 
+
+  ; ldx PPUCTRL
+  ; ldx #$00
+  ; stx PPUCTRL     ; Disable NMI and set VRAM increment to 32
+  ; stx PPUMASK     ; Disable rendering
+  ; stx $4010       ; Disable DMC IRQ
+  ; dex             ; Subtracting 1 from $00 gives $FF, which is a
+  ; txs             ; quick way to set the stack pointer to $01FF
+  ; bit PPUSTATUS   ; Acknowledge stray vblank NMI across reset
+  ; bit SNDCHN      ; Acknowledge DMC IRQ
+  ; lda #$40
+  ; sta JOY2        ; Disable APU Frame IRQ
+  ; lda #$0F
+  ; sta SNDCHN      ; Disable DMC playback, initialize other channels
 
 vwait1:
   bit PPUSTATUS   ; It takes one full frame for the PPU to become
