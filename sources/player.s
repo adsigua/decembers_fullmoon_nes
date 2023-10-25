@@ -1,11 +1,21 @@
 .include "nes.inc"
 .include "global.inc"
+.include "entity.inc"
 
 .segment "ZEROPAGE"
   player_index:       .res 1
-  player_entity_index:.res 1
+  collision_flags:    .res 1
+  temp_pos_hi:      .res 1
+  temp_pos_lo:      .res 1
+  player_width:      .res 1
+  player_min_height:      .res 1
+  player_max_height:      .res 1
+  velocity_flag:      .res 1
+
 
   min_bg_xpos_scroll = $30
+  sprite_width = $08
+
   ; entity_addr = $300
   ; entity_type = $0300
   ; entity_state = $0310
@@ -27,14 +37,15 @@
 ; NTSC values, and PAL accelerations should be 1.44 times NTSC.
 ; WALK_SPD = 14  ; speed limit in 1/256 px/frame
 
-LEFT_WALL = 32
-RIGHT_WALL = 224
+left_screen_limit = $02
+right_screen_limit = $fd
+top_floor_limit = $8a
+bottom_floor_limit = $de
 
 .segment "CODE"
 .proc init_player_entity
   lda #0
   sta player_index
-  sta player_entity_index
   sta entity_id
   sta entity_anim_delay_cnt
   sta entity_velocity_x
@@ -51,19 +62,25 @@ RIGHT_WALL = 224
   lda player_anim_idle, x
   sta entity_anim_id
 
-  lda #EntityState::Idle
-  ora #$80
+  lda #EntityState::Idle | EntityState::State_Changed | EntityState::Facing_Right
   sta entity_state
 
-  lda player_spawn_x, x
-  sta entity_pos_x
-  lda player_spawn_y, x
-  sta entity_pos_y
+  lda player_char_width, x
+  sta player_width
+  lda player_char_height, x
+  sta player_max_height
+  sec
+  sbc #$09                  
+  sta player_min_height     ;offset about more than one tile up
+
+  ldy player_max_height
+  jsr init_player_pos
+
   rts
 .endproc
 
 .proc update_player
-  jsr update_player_velocity
+  jsr check_player_move_input
   rts
 .endproc
 
@@ -71,14 +88,17 @@ RIGHT_WALL = 224
   rts
 .endproc
 
+.proc update_player_entity
+  jsr update_player_velocity
+  jsr update_player_animation
+  jsr update_player_oam_buffer
+  rts
+.endproc
+
 ; Moves the player character in response to controller 1.
 ; facing 0=left, 1=right
-.proc update_player_velocity
-  velocityFlag = $01
+.proc check_player_move_input
   ldx player_index
-
-  lda #0
-  sta velocityFlag
 
   lda cur_keys
   and #KEY_RIGHT
@@ -89,9 +109,6 @@ RIGHT_WALL = 224
     lda entity_state
     ora #%01000000
     sta entity_state
-
-    lda #$80
-    sta velocityFlag
 
     jmp @doneInputX
   @notRight:
@@ -108,9 +125,6 @@ RIGHT_WALL = 224
     and #%10111111
     sta entity_state
 
-    lda #$80
-    sta velocityFlag
-
     jmp @doneInputX                    
   @noInput_x:
     lda #0
@@ -122,8 +136,6 @@ RIGHT_WALL = 224
   beq @notDown     
     lda player_move_speed, x
     sta entity_velocity_y
-    lda #$80
-    sta velocityFlag
     jmp @doneInputY
   @notDown:
   lda cur_keys
@@ -134,26 +146,31 @@ RIGHT_WALL = 224
     clc
     adc #$01
     sta entity_velocity_y 
-    lda #$80
-    sta velocityFlag
     jmp @doneInputY                    
   @noInput_y:
     lda #0
     sta entity_velocity_y 
   @doneInputY:
   
-  bit velocityFlag
-  bmi @check_state_change_moving
+  jsr check_move_state_change
+
+  @end_player_velocity_check:
+    rts
+.endproc
+
+.proc check_move_state_change
+  lda entity_velocity_x
+  bne @check_state_change_moving
+  lda entity_velocity_y
+  bne @check_state_change_moving
 
   @check_state_change_still:
     lda entity_state
-    and #$0f
-    cmp #EntityState::Idle
-    beq :+
+    and #EntityState::Idle
+    bne @end_move_state_change_check
       lda entity_state
-      ora #%10000000
-      and #$F0
-      ora #EntityState::Idle
+      and #$f0
+      ora #EntityState::State_Changed | EntityState::Idle
       sta entity_state
 
       lda player_anim_idle, x
@@ -161,18 +178,15 @@ RIGHT_WALL = 224
 
       ldx #0
       jsr update_frame_delay_cnt
-    :
-    jmp @end_player_velocity_check
+    jmp @end_move_state_change_check
 
   @check_state_change_moving:
     lda entity_state
-    and #$0f
-    cmp #EntityState::Moving
-    beq :+
+    and #EntityState::Moving
+    bne @end_move_state_change_check
       lda entity_state
-      ora #%10000000
-      and #$F0
-      ora #EntityState::Moving
+      and #$f0
+      ora #EntityState::State_Changed | EntityState::Moving
       sta entity_state
       
       lda player_anim_walk, x
@@ -180,8 +194,7 @@ RIGHT_WALL = 224
 
       ldx #0
       jsr update_frame_delay_cnt
-    :
-  @end_player_velocity_check:
+    @end_move_state_change_check:
     rts
 .endproc
 
@@ -195,77 +208,226 @@ RIGHT_WALL = 224
   ldy entity_anim_id
   lda (tempX), y
   sta entity_anim_delay_cnt
-.endproc
-
-
-.proc apply_player_velocity
-  lda entity_velocity_x
-  beq @check_y_velocity
-  bmi @move_x_pos
-  
-  ;check if good for scrolling if not continue move_x_pos
-  bit level_flags
-  bpl @move_x_pos
-  ldy entity_pos_x
-  cpy #min_bg_xpos_scroll
-  bcc @move_x_pos
-
-  @add_to_scroll_x:
-    clc
-    adc scroll_x_lo
-    sta scroll_x_lo
-    lda #0          
-    adc scroll_x
-    sta scroll_x
-    lda level_flags
-    bcc @no_nametable_switch
-      ora #%00100000
-    @no_nametable_switch:
-    ora #%01000000
-    sta level_flags
-    jmp @check_y_velocity
-
-  @move_x_pos:
-    ; if velocity is negative, subtract 1 from high byte to sign extend
-    lda entity_velocity_x
-    bpl @entity_positive_x_speed
-    dec entity_pos_x
-  @entity_positive_x_speed:
-    clc
-    adc entity_pos_x_lo
-    sta entity_pos_x_lo
-    lda #0          
-    adc entity_pos_x
-    sta entity_pos_x
-    
-
-  @check_y_velocity:
-  lda entity_velocity_y
-  beq @end_velocity_apply
-
-  bpl @entity_positive_y_speed
-    dec entity_pos_y
-  @entity_positive_y_speed:
-  clc
-  adc entity_pos_y_lo
-  sta entity_pos_y_lo
-  lda #0        
-  adc entity_pos_y
-  sta entity_pos_y
-  ;jsr bound_position_y
-
-  @end_velocity_apply:
-
   rts
 .endproc
 
+;buffers new pos x and y based on velocity values, then apply velocity
+.proc update_player_velocity
+  lda entity_velocity_x
+  beq @check_y_velocity
+  @check_x_velocity:
+  lda entity_pos_x
+  sta temp_pos_hi
+  lda entity_velocity_x
+  bpl @entity_positive_x_speed
+    ; if velocity is negative, subtract 1 from high byte to sign extend
+    dec temp_pos_hi
+  @entity_positive_x_speed:
+    clc
+    adc entity_pos_x_lo
+    sta temp_pos_lo
+    lda #0          
+    adc temp_pos_hi
+    sta temp_pos_hi
+
+    jsr apply_velocity_x
+
+  @check_y_velocity:
+  lda entity_pos_y
+  sta temp_pos_hi
+
+  lda entity_velocity_y
+  beq @end_velocity_update
+
+  bpl @entity_positive_y_speed
+    dec temp_pos_hi
+  @entity_positive_y_speed:
+    clc
+    adc entity_pos_y_lo
+    sta temp_pos_lo
+    lda #0        
+    adc temp_pos_hi
+    sta temp_pos_hi
+
+    jsr apply_velocity_y
+  @end_velocity_update:
+  rts
+.endproc
+
+;applies velocity if new position doesn't have any collisions or not edge of screen
+.proc apply_velocity_x
+  lda entity_velocity_x
+  bmi @bound_x_to_left
+  @bound_x_to_right:         
+    jsr check_collision_right
+    bne @end_check_velocity_x
+
+    bit level_flags       ;check if can scroll
+    bpl @apply_x_pos
+    ldy temp_pos_hi
+    cpy #min_bg_xpos_scroll
+    bcc @apply_x_pos
+  @apply_scroll:
+    lda entity_velocity_x
+    jsr apply_scroll_x
+    rts
+  @bound_x_to_left:
+    jsr check_collision_left
+    bne @end_check_velocity_x 
+  @apply_x_pos:
+    jsr apply_pos_x
+  @end_check_velocity_x:
+    rts
+.endproc
+
+.proc apply_velocity_y
+  lda entity_velocity_y
+  bmi @bound_y_to_top
+  @bound_y_to_bottom:         
+    jsr check_collision_bottom
+    bne @end_check_velocity_y
+    jmp @apply_y_pos
+  @bound_y_to_top:
+    jsr check_collision_top
+    bne @end_check_velocity_y 
+  @apply_y_pos:
+    jsr apply_pos_y
+  @end_check_velocity_y:
+    rts
+.endproc
+
+.proc check_collision_right
+  lda player_min_height
+  clc
+  adc entity_pos_y
+  tay
+  lda player_width
+  clc
+  adc temp_pos_hi
+  tax                         ;if there is collision return (no movement)
+  jsr get_tile_type           ;check if top of tile has collision
+  bne @end_collision_check_right
+
+  lda player_max_height       ;check collision for bottom of feet
+  clc
+  adc entity_pos_y
+  tay
+  lda player_width
+  clc
+  adc temp_pos_hi
+  tax
+  jsr get_tile_type
+  bne @end_collision_check_right
+
+  lda #right_screen_limit     ;check if colliding on right screen
+  sec
+  sbc player_width
+  cmp temp_pos_hi
+  lda #0
+  bcs @end_collision_check_right
+    lda #$01
+  @end_collision_check_right:
+  rts
+.endproc
+
+.proc check_collision_left
+  lda player_min_height
+  clc
+  adc entity_pos_y
+  tay
+  lda temp_pos_hi
+  tax                         ;if there is collision return (no movement)
+  jsr get_tile_type           ;check if top of tile has collision
+  bne @end_collision_check_left
+
+  lda player_max_height       ;check collision for bottom of feet
+  clc
+  adc entity_pos_y
+  tay
+  lda temp_pos_hi
+  tax
+  jsr get_tile_type
+  bne @end_collision_check_left
+
+  lda temp_pos_hi
+  cmp #left_screen_limit
+  lda #0
+  bcs @end_collision_check_left
+    lda #$01
+  @end_collision_check_left:
+  rts
+.endproc
+
+.proc check_collision_bottom
+  lda player_max_height
+  clc
+  adc temp_pos_hi
+  tay
+  lda entity_pos_x
+  tax                         ;if there is collision return (no movement)
+  jsr get_tile_type           ;check going up top left collision
+  bne @end_collision_check_bottom
+
+  lda player_max_height       ;cheeck for collision going up, from top right
+  clc
+  adc temp_pos_hi
+  tay
+  lda player_width
+  clc
+  adc entity_pos_x
+  tax
+  jsr get_tile_type
+
+  @end_collision_check_bottom:
+  rts
+.endproc
+
+.proc check_collision_top
+  lda player_min_height
+  clc
+  adc temp_pos_hi
+  tay
+  lda entity_pos_x
+  tax                         ;if there is collision return (no movement)
+  jsr get_tile_type           ;check going up top left collision
+  bne @end_collision_check_top
+
+  lda player_min_height       ;cheeck for collision going up, from top right
+  clc
+  adc temp_pos_hi
+  tay
+  lda player_width
+  clc
+  adc entity_pos_x
+  tax
+  jsr get_tile_type
+
+  @end_collision_check_top:
+  rts
+.endproc
+
+.proc apply_pos_x
+  lda temp_pos_hi
+  sta entity_pos_x
+  lda temp_pos_lo
+  sta entity_pos_x_lo
+  rts
+.endproc
+
+.proc apply_pos_y
+  lda temp_pos_hi
+  sta entity_pos_y
+  lda temp_pos_lo
+  sta entity_pos_y_lo
+  rts
+.endproc
 
 .proc update_player_animation
     ;check if there was state change, if not check if delay cnt is 0
     bit entity_state
     bpl :+
       lda entity_state
-      eor #$80
+      eor #EntityState::State_Changed
       sta entity_state
       jmp @update_anim_frame
     :
@@ -281,16 +443,14 @@ RIGHT_WALL = 224
       ;check if anim is only 1 frame, if yes exit anim update
       ldx entity_anim_id
       lda player_anim_frame_count, x
-      cmp #$01
+      cmp #1
       beq @end_anim_check
 
       @check_next_frame:
-        ldy entity_anim_frame_id
-        iny
-        tya
+        inc entity_anim_frame_id
+        lda entity_anim_frame_id
         cmp player_anim_frame_count, x
         bcs @is_over_frame_count
-        sta entity_anim_frame_id
         jmp @store_frame_delay_count
 
       @is_over_frame_count:
@@ -302,7 +462,6 @@ RIGHT_WALL = 224
         jsr update_frame_delay_cnt
         
   @end_anim_check:
-    
     rts
 .endproc
 
@@ -334,7 +493,7 @@ RIGHT_WALL = 224
   lda player_meta_sprites_sprite_count, x
   sta sprite_count
 
-  ldx #0
+  ;ldx #0
 
   @draw_entity_loop:
     ;y-pos
@@ -363,7 +522,7 @@ RIGHT_WALL = 224
     lda pallete_index
     sta tempZ
     lda entity_state
-    and #%01000000
+    and #SpriteAttrib::FlipX
     ora tempZ
     sta oam_buffer+2             
 
@@ -388,12 +547,12 @@ RIGHT_WALL = 224
       sec
       sbc tempZ   
       clc
-      adc #$08
+      adc #sprite_width
     @place_x_offset_to_buffer:
       sta oam_buffer+3
 
   @place_buffer_to_oam:
-    jsr update_oam
+    jsr update_oam_buffer
     inx
     cpx sprite_count
     bne @draw_entity_loop
@@ -415,6 +574,12 @@ player_spawn_y:
 ; player_spawn_data_addr_hi:  
 ;   .byte >player_00_data
 
+  player_char_height:
+    .byte $18
+
+  player_char_width:
+    .byte $10
+
   player_00_data:
     .byte $00
 
@@ -425,7 +590,7 @@ player_spawn_y:
     .byte $01
 
   player_move_speed:
-    .byte $60                   ;entity move speed
+    .byte $7f                   ;entity move speed
 
   player_anim_frame_count:
     .byte $01, $04
@@ -491,83 +656,172 @@ player_spawn_y:
 player_meta_sprites_sprite_count:
   .byte $06
 
-player_metasprite_x_offset_addr_lo:
-  .byte <player_sprites_x_offset_00, <player_sprites_x_offset_01, <player_sprites_x_offset_02, <player_sprites_x_offset_03, <player_sprites_x_offset_04, <player_sprites_x_offset_05, <player_sprites_x_offset_06, <player_sprites_x_offset_07
-player_metasprite_x_offset_addr_hi:
-  .byte >player_sprites_x_offset_00, >player_sprites_x_offset_01, >player_sprites_x_offset_02, >player_sprites_x_offset_03, >player_sprites_x_offset_04, >player_sprites_x_offset_05, >player_sprites_x_offset_06, >player_sprites_x_offset_07
-player_metasprite_y_offset_addr_lo:
-  .byte <player_sprites_y_offset_00, <player_sprites_y_offset_01, <player_sprites_y_offset_02, <player_sprites_y_offset_03, <player_sprites_y_offset_04, <player_sprites_y_offset_05, <player_sprites_y_offset_06, <player_sprites_y_offset_07
-player_metasprite_y_offset_addr_hi:
-  .byte >player_sprites_y_offset_00, >player_sprites_y_offset_01, >player_sprites_y_offset_02, >player_sprites_y_offset_03, >player_sprites_y_offset_04, >player_sprites_y_offset_05, >player_sprites_y_offset_06, >player_sprites_y_offset_07
+; player_metasprite_x_offset_addr_lo:
+;   .byte <player_sprites_x_offset_00, <player_sprites_x_offset_01, <player_sprites_x_offset_02, <player_sprites_x_offset_03, <player_sprites_x_offset_04, <player_sprites_x_offset_05, <player_sprites_x_offset_06, <player_sprites_x_offset_07
+; player_metasprite_x_offset_addr_hi:
+;   .byte >player_sprites_x_offset_00, >player_sprites_x_offset_01, >player_sprites_x_offset_02, >player_sprites_x_offset_03, >player_sprites_x_offset_04, >player_sprites_x_offset_05, >player_sprites_x_offset_06, >player_sprites_x_offset_07
+; player_metasprite_y_offset_addr_lo:
+;   .byte <player_sprites_y_offset_00, <player_sprites_y_offset_01, <player_sprites_y_offset_02, <player_sprites_y_offset_03, <player_sprites_y_offset_04, <player_sprites_y_offset_05, <player_sprites_y_offset_06, <player_sprites_y_offset_07
+; player_metasprite_y_offset_addr_hi:
+;   .byte >player_sprites_y_offset_00, >player_sprites_y_offset_01, >player_sprites_y_offset_02, >player_sprites_y_offset_03, >player_sprites_y_offset_04, >player_sprites_y_offset_05, >player_sprites_y_offset_06, >player_sprites_y_offset_07
 
 player_metasprite_index_addr_lo:
-  .byte <player_meta_sprites_00, <player_meta_sprites_01, <player_meta_sprites_02, <player_meta_sprites_03, <player_meta_sprites_04, <player_meta_sprites_05, <player_meta_sprites_06, <player_meta_sprites_07
+  .byte <player_meta_sprites_00, <player_meta_sprites_01, <player_meta_sprites_02, <player_meta_sprites_03, 
+        <player_meta_sprites_04, <player_meta_sprites_05, <player_meta_sprites_06, <player_meta_sprites_07, 
+        <player_meta_sprites_08, <player_meta_sprites_09
 player_metasprite_index_addr_hi:
-  .byte >player_meta_sprites_00, >player_meta_sprites_01, >player_meta_sprites_02, >player_meta_sprites_03, >player_meta_sprites_04, >player_meta_sprites_05, >player_meta_sprites_06, >player_meta_sprites_07
+  .byte >player_meta_sprites_00, >player_meta_sprites_01, >player_meta_sprites_02, >player_meta_sprites_03, 
+        >player_meta_sprites_04, >player_meta_sprites_05, >player_meta_sprites_06, >player_meta_sprites_07, 
+        >player_meta_sprites_08, >player_meta_sprites_09
+
+player_metasprite_offset_x_lo:
+  .byte <player_meta_spites_x_offset_00, <player_meta_spites_x_offset_01, <player_meta_spites_x_offset_02, <player_meta_spites_x_offset_03, 
+        <player_meta_spites_x_offset_04, <player_meta_spites_x_offset_05, <player_meta_spites_x_offset_06, <player_meta_spites_x_offset_07, 
+        <player_meta_spites_x_offset_08, <player_meta_spites_x_offset_09
+player_metasprite_offset_x_hi:
+  .byte >player_meta_spites_x_offset_00, >player_meta_spites_x_offset_01, >player_meta_spites_x_offset_02, >player_meta_spites_x_offset_03, 
+        >player_meta_spites_x_offset_04, >player_meta_spites_x_offset_05, >player_meta_spites_x_offset_06, >player_meta_spites_x_offset_07, 
+        >player_meta_spites_x_offset_08, >player_meta_spites_x_offset_09
+
+player_metasprite_offset_y_lo:
+  .byte <player_meta_spites_y_offset_00, <player_meta_spites_y_offset_01, <player_meta_spites_y_offset_02, <player_meta_spites_y_offset_03, 
+        <player_meta_spites_y_offset_04, <player_meta_spites_y_offset_05, <player_meta_spites_y_offset_06, <player_meta_spites_y_offset_07, 
+        <player_meta_spites_y_offset_08, <player_meta_spites_y_offset_09
+player_metasprite_offset_y_hi:
+  .byte >player_meta_spites_y_offset_00, >player_meta_spites_y_offset_01, >player_meta_spites_y_offset_02, >player_meta_spites_y_offset_03, 
+        >player_meta_spites_y_offset_04, >player_meta_spites_y_offset_05, >player_meta_spites_y_offset_06, >player_meta_spites_y_offset_07, 
+        >player_meta_spites_y_offset_08, >player_meta_spites_y_offset_09
 
 
-player_meta_sprites_offset:
-  player_sprites_x_offset_00:
-    .byte $00
-  player_sprites_x_offset_01:
-    .byte $08
-  player_sprites_x_offset_02:
-    .byte $00
-  player_sprites_x_offset_03:
-    .byte $08
-  player_sprites_x_offset_04:
-    .byte $00
-  player_sprites_x_offset_05:
-    .byte $08
-  player_sprites_x_offset_06:
-    .byte $00
-  player_sprites_x_offset_07:
-    .byte $08
+; player_meta_sprites_offset:
+  ;   player_sprites_x_offset_00:
+  ;     .byte $00
+  ;   player_sprites_x_offset_01:
+  ;     .byte $08
+  ;   player_sprites_x_offset_02:
+  ;     .byte $00
+  ;   player_sprites_x_offset_03:
+  ;     .byte $08
+  ;   player_sprites_x_offset_04:
+  ;     .byte $00
+  ;   player_sprites_x_offset_05:
+  ;     .byte $08
+  ;   player_sprites_x_offset_06:
+  ;     .byte $00
+  ;   player_sprites_x_offset_07:
+  ;     .byte $08
 
-  player_sprites_y_offset_00:
-    .byte $00
-  player_sprites_y_offset_01:
-    .byte $00
-  player_sprites_y_offset_02:
-    .byte $08
-  player_sprites_y_offset_03:
-    .byte $08
-  player_sprites_y_offset_04:
-    .byte $10
-  player_sprites_y_offset_05:
-    .byte $10
-  player_sprites_y_offset_06:
-    .byte $00
-  player_sprites_y_offset_07:
-    .byte $08
+  ;   player_sprites_y_offset_00:
+  ;     .byte $00
+  ;   player_sprites_y_offset_01:
+  ;     .byte $00
+  ;   player_sprites_y_offset_02:
+  ;     .byte $08
+  ;   player_sprites_y_offset_03:
+  ;     .byte $08
+  ;   player_sprites_y_offset_04:
+  ;     .byte $10
+  ;   player_sprites_y_offset_05:
+  ;     .byte $10
+  ;   player_sprites_y_offset_06:
+  ;     .byte $00
+  ;   player_sprites_y_offset_07:
+  ;     .byte $08
 
 
           ;id  w00  w01  w02
 player_meta_sprites_index:
   player_meta_sprites_00:
     .byte $00, $00, $02, $00
+  player_meta_spites_x_offset_00:
+    .byte $00, $00, $00, $00
+  player_meta_spites_y_offset_00:
+    .byte $00, $00, $00, $00
+
   player_meta_sprites_01:
     .byte $01, $01, $03, $01
+  player_meta_spites_x_offset_01:
+    .byte $08, $08, $08, $08
+  player_meta_spites_y_offset_01:
+    .byte $00, $00, $00, $00
+
   player_meta_sprites_02:
     .byte $14, $14, $12, $10
+  player_meta_spites_x_offset_02:
+    .byte $00, $00, $00, $00
+  player_meta_spites_y_offset_02:
+    .byte $08, $08, $08, $08
+
   player_meta_sprites_03:
     .byte $15, $15, $13, $11
+  player_meta_spites_x_offset_03:
+    .byte $08, $08, $08, $08
+  player_meta_spites_y_offset_03:
+    .byte $08, $08, $08, $08
+
+
+
   player_meta_sprites_04:
     .byte $20, $24, $22, $20
+  player_meta_spites_x_offset_04:
+    .byte $00, $00, $00, $00
+  player_meta_spites_y_offset_04:
+    .byte $10, $10, $10, $10
+
   player_meta_sprites_05:
     .byte $21, $25, $23, $21
+  player_meta_spites_x_offset_05:
+    .byte $08, $08, $08, $08
+  player_meta_spites_y_offset_05:
+    .byte $10, $10, $10, $10
 
   player_meta_sprites_06:
+    .byte $2a, $00, $00, $00
+  player_meta_spites_x_offset_06:
     .byte $00, $00, $00, $00
+  player_meta_spites_y_offset_06:
+    .byte $18, $00, $00, $00
+
   player_meta_sprites_07:
+    .byte $1a, $00, $00, $00
+  player_meta_spites_x_offset_07:
     .byte $00, $00, $00, $00
+  player_meta_spites_y_offset_07:
+    .byte $18, $00, $00, $00
+
+
+
+  player_meta_sprites_08:
+    .byte $00, $00, $00, $00
+  player_meta_spites_x_offset_08:
+    .byte $00
+  player_meta_spites_y_offset_08:
+    .byte $00
+
+  player_meta_sprites_09:
+    .byte $00, $00, $00, $00
+  player_meta_spites_x_offset_09:
+    .byte $00
+  player_meta_spites_y_offset_09:
+    .byte $00
+
+
 
     ; .byte $00, $01, $14, $15, $20, $21  ;idle
     ; .byte $00, $01, $14, $15, $24, $25 ; Frame 4
     ; .byte $02, $03, $12, $13, $22, $23 ; Frame 1
     ; .byte $00, $01, $10, $11, $20, $21 ; Frame 2
 
-;format = first byte anim frame count, second byte frame duration, 
+;format = first byte anim frame count, second byte frame duration,
+    ; adc scroll_x_fine
+    ; cmp #$08
+    ; bne @no_coarse_increment
+    ;   inc scroll_x_coarse
+
+    ;   lda #0
+    ; @no_coarse_increment:
+    ; sta scroll_x_fine
+
     ;3rd byte palette, 4-5 byte frame address
     ; player_00_anim_idle:
     ;   .byte $01
@@ -619,3 +873,5 @@ player_meta_sprites_index:
   ; ; because of how far he's leaned forward
   ; player_frame_to_xoffset:
   ;   .byte 0, 0, 0, 0, 0, 0, 0, 1
+
+

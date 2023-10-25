@@ -1,11 +1,12 @@
 .include "nes.inc"
 .include "global.inc"
+.include "entity.inc"
 
 .segment "ZEROPAGE"
   rom_rle_pointer:    .res 2      ;pointer to nametable data 
   map_pointer:        .res 2
   nametable_pointer:  .res 2      
-  attrtable_pointer:  .res 2       
+  attrtable_pointer:  .res 2  
 
   ;background flags - current state of bg update
   ;x--- ----    there is tile data stored in nametable buffer
@@ -17,11 +18,20 @@
   col_palette_buffer = $0140    ;pallete data for each col tile
 
   map_tile_data = $0400         ;meta tile data 2screen's worth (up to $05ff)
+  map_tile_data_col_hi_offset = $16
+  map_tile_data_col_len = $0c
 
-  nametable1_addr = $2000
-  attrtable1_addr = $23C0
-  nametable2_addr = $2400
-  attrtable2_addr = $27C0
+  nametable1_addr = $20C0
+  attrtable1_addr = $23C8
+  nametable2_addr = $24C0
+  attrtable2_addr = $27C8
+
+  ;palette buffer
+    tile_index = $00
+    palette_buffer_index = $02
+    current_palette_val = $04
+    offset_pointer = $05 ;$06
+
 
 .segment "CODE"
 
@@ -32,13 +42,19 @@
 
 .export draw_bg
 
-.proc draw_bg
-  lda #%10010100	; Enable NMI (specifically enable generation of an interrupt at vblank interval)
-  sta PPUCTRL       ; store it on PPUCTRL
 
+.proc draw_bg
+  jsr load_main_palette
   jsr init_pointers
 
-  .repeat 18
+  jsr draw_ui
+
+  lda ppu_ctrl_val
+  ora #VRAM_DOWN
+  sta PPUCTRL
+  sta ppu_ctrl_val
+
+  .repeat 19
     jsr update_column
     jsr draw_column
     ; jsr decode_column
@@ -58,13 +74,36 @@
   rts
 .endproc
 
+.proc load_main_palette
+  ; seek to the start of palette memory ($3F00-$3F1F)
+  ldx #$3F
+  stx PPUADDR
+  ldx #$00
+  stx PPUADDR
+  @load_bg_palette:
+    lda caves_palette, x
+    sta PPUDATA
+    inx
+    cpx #$10
+    bcc @load_bg_palette
+  ldx #$00
+  @load_sprite_palette:
+    lda sprites_palette, x
+    sta PPUDATA
+    inx
+    cpx #$10
+    bcc @load_sprite_palette
+    
+    rts
+.endproc
+
 .proc init_pointers
   lda #0
   sta background_flags
 
-  lda #<beach_night
+  lda #<level_cave_tile_rle
   sta rom_rle_pointer
-  lda #>beach_night
+  lda #>level_cave_tile_rle
   sta rom_rle_pointer+1
   
   lda #<map_tile_data
@@ -91,6 +130,11 @@
 .endproc
 
 .proc draw_column
+  lda ppu_ctrl_val
+  ora #VRAM_DOWN
+  sta PPUCTRL
+  sta ppu_ctrl_val
+
   ;check bit 7 of background flags (if there was column data buffered)
   bit background_flags
   bpl @check_palette_draw
@@ -103,9 +147,6 @@
     jsr draw_palette_ppu
 
   @end_draw_column:
-  lda level_flags
-  ora #%01000000
-  sta level_flags
   rts
 .endproc
 
@@ -126,12 +167,11 @@
     bvs @place_literal          ;if bit 6 set do placing literal
     @copy_byte:
       lda (rom_rle_pointer), y        ;load len
-      and #$3f                    ;remove first two bits to get actual length
+      and #$3f                        ;remove first two bits to get actual length
       clc
       adc place_count
       sta place_count
       
-
       iny                         ;move pointer to tile data
       clc
       lda (rom_rle_pointer), y        ;load actual tile data
@@ -201,6 +241,8 @@
   @buffer_loop:
     ;get meta-tile index
     lda (map_pointer), y
+    tax
+    lda meta_tile_index, x
     ;load buffer index
     ldy buffer_index
     ;get tile data by mt index
@@ -216,7 +258,7 @@
     sty buffer_index
     tya
     clc
-    adc #$1c
+    adc #$16      ;increment by 1 column cycle -2
     tay
 
     lda meta_tiles_10, x
@@ -228,112 +270,143 @@
 
     ;check for pallete
     lda map_pointer
-    and #$10
+    and #$04
     beq @no_palette_check
     lda tile_index
-    cmp #$0e
+    cmp #$0b
     beq @do_pallete_buffer
     and #$01
-    beq @no_palette_check
+    bne @no_palette_check
     @do_pallete_buffer:
       jsr buffer_palette
 
   @no_palette_check:
     inc tile_index
     ldy tile_index
-    cpy #$0f
+    cpy #$0c
     bne @buffer_loop
 
   @increment_map_pointer:
     lda map_pointer
     clc
-    adc #$10
+    adc #map_tile_data_col_len
     sta map_pointer
     lda map_pointer+1
-    adc #$00
-    cmp #$06  ;if hi byte goes over $05
-    bne :+
+    adc #00
+    sta map_pointer+1
+    cmp #$05
+    bne @end_column_buffer_end
+
+    lda map_pointer
+    cmp #$80  ;if hi byte goes over $05
+    bcc :+
       lda #<map_tile_data   ;if over $05 wrap around to first column of tile data
       sta map_pointer
       lda #>map_tile_data
+      sta map_pointer+1
     :
-    sta map_pointer+1
   @end_column_buffer_end:
-
-    ;set tile data buffer flag
     lda background_flags
-    ora #%10000000
+    ora #BGFlags::nametable_buffered
     sta background_flags
 
+    ldy #0
+    lda (rom_rle_pointer), y
+    cmp #$ff
+    bne :+
+      lda level_flags
+      ora #LevelFlags::LastColumnLoaded
+      sta level_flags
+    :
     rts
 .endproc
 
 ;compute attribute table buffer for one column based on meta-tile data 
 .proc buffer_palette
-  tile_index = $00
-  palette_buffer_index = $02
-  current_palette_val = $04
-
-  offset_pointer = $05 ;$06
-
-  lda map_pointer
-  clc 
-  adc tile_index
-  sec
-  sbc #$11
-  sta offset_pointer
-  lda map_pointer+1
-  sta offset_pointer+1
-
-  ldy #0
-  ;top left
-  lda (offset_pointer), y
-  tax
-  lda meta_tile_pallete_data, x
+  ldy #$00
+  lda #$00
   sta current_palette_val
+  lda tile_index
+  bne @not_first_tile
+  @buffer_first_tile:
+    lda map_pointer
+    sec
+    sbc #$0c
+    sta offset_pointer
+    lda map_pointer+1
+    sta offset_pointer+1
 
-  ;top-right
-  iny
-  lda (offset_pointer), y
-  tax
-  lda meta_tile_pallete_data, x
-  clc
-  asl
-  asl
-  ora current_palette_val
-  sta current_palette_val
-  
-  ;bottom left
-  lda map_pointer
-  sta offset_pointer
-  ldy tile_index
-  dey
-  lda (offset_pointer), y
-  tax
-  lda meta_tile_pallete_data, x
-  clc
-  asl
-  asl
-  asl
-  asl
-  ora current_palette_val
-  sta current_palette_val
+    lda (offset_pointer), y
+    jsr buffer_bot_left_palette
+    lda (map_pointer), y
+    jsr buffer_bot_right_palette
+    
+    jmp @store_value_to_buffer
 
-  ;bottom_right
-  iny
-  lda (offset_pointer), y
-  tax
-  lda meta_tile_pallete_data, x
-  clc
-  asl
-  asl
-  asl
-  asl
-  asl
-  asl
-  ora current_palette_val
-  sta current_palette_val
+  @not_first_tile:
 
+  ldx tile_index
+  cpx #$0b
+  bne @not_last_tile
+  @buffer_last_tile:
+    lda map_pointer
+    clc
+    adc tile_index
+    sec
+    sbc #$0c
+    sta offset_pointer
+    lda map_pointer+1
+    sta offset_pointer+1
+
+    ;store top left
+    lda (offset_pointer), y
+    tax
+    lda meta_tile_pallete_data, x
+    sta current_palette_val
+
+    ;store top right
+    ldy #$0c
+    lda (offset_pointer), y
+    jsr buffer_top_right_palette
+    
+    jmp @store_value_to_buffer
+
+  @not_last_tile:
+    lda map_pointer
+    clc 
+    adc tile_index
+    sec
+    sbc #$0d
+    sta offset_pointer
+    lda map_pointer+1
+    sta offset_pointer+1
+
+    @top_left:
+      lda (offset_pointer), y
+      tax
+      lda meta_tile_pallete_data, x
+      sta current_palette_val
+
+    @bottom_left:
+      iny
+      lda (offset_pointer), y
+      jsr buffer_bot_left_palette
+
+    @top_right:
+      lda map_pointer
+      sta offset_pointer
+      ldy tile_index
+      dey
+      lda (offset_pointer), y
+      jsr buffer_top_right_palette
+
+    @bottom_right:
+      ;bottom_right
+      iny
+      lda (offset_pointer), y
+      jsr buffer_bot_right_palette
+
+  @store_value_to_buffer:
   ;store computed attribute value to buffer, then increment buffer index
   ldx palette_buffer_index
   sta col_palette_buffer, x
@@ -344,6 +417,44 @@
   ora #%01000000
   sta background_flags
 
+  @end_palette_buffer:
+  rts
+.endproc
+
+.proc buffer_top_right_palette
+  tax
+  lda meta_tile_pallete_data, x
+  clc
+  asl
+  asl
+  ora current_palette_val
+  sta current_palette_val
+  rts
+.endproc
+
+.proc buffer_bot_left_palette
+  lda (offset_pointer), y
+  tax
+  lda meta_tile_pallete_data, x
+  clc
+  asl
+  asl
+  asl
+  asl
+  ora current_palette_val
+  sta current_palette_val
+  rts
+.endproc
+
+.proc buffer_bot_right_palette
+  tax
+  lda meta_tile_pallete_data, x
+  clc
+  ror
+  ror
+  ror
+  ora current_palette_val
+  sta current_palette_val
   rts
 .endproc
 
@@ -366,7 +477,7 @@
     sta PPUDATA
     iny
     inx
-    cpx #$1e
+    cpx #$18
     bne @draw_ppu_loop
 
     ldx #0
@@ -376,12 +487,12 @@
     sta PPUADDR
     lda nametable_pointer
     sta PPUADDR
-    cpy #$3c
+    cpy #$30
     bne @draw_ppu_loop
 
   @move_nametable_pointer:
     lda nametable_pointer
-    cmp #$20
+    cmp #$e0
     bne @end_draw_column
 
   @swith_nametable:
@@ -405,8 +516,8 @@
 .endproc
 
 .proc draw_palette_ppu
-  attrib_offset = $00
   ;clear palette buffer flag
+  attrib_offset = $00
   lda background_flags
   eor #%01000000
   sta background_flags
@@ -424,6 +535,7 @@
   ;store palette for one column by updating ppudata per 32byte (skip 4 rows), 
   ;then just offset by 8bytes each cycle (in palette buffer row are separated by 1 byte each)
   @draw_ppu_loop:
+    bit PPUSTATUS
     lda col_palette_buffer, y
     sta PPUDATA
     lda col_palette_buffer+4, y
@@ -438,14 +550,17 @@
     sta PPUADDR
     sta attrib_offset
     
-    cpy #$04
+    cpy #$03
     bne @draw_ppu_loop
+
+    lda col_palette_buffer, y
+    sta PPUDATA
 
   ;increment attrb pointer, check if need to switch
   @move_attr_pointer:
     inc attrtable_pointer
     lda attrtable_pointer
-    cmp #$c8
+    cmp #$d0
     bne @end_palette_draw
 
   ;attrb table switching
@@ -470,284 +585,447 @@
   rts
 .endproc
 
-;tile compression/meta-tiles
-;byte 0-3 sprite/cell index, 
-;00 10
-;01 11
-meta_tiles:
-meta_tiles_00:
-  .byte $fe, $00, $01, $02, $73, $b2, $65, $36, $86, $a3, $80, $a0, $82, $fe, $b1, $44
-meta_tiles_10:
-  .byte $fe, $00, $01, $02, $fe, $b2, $66, $36, $86, $a4, $81, $a1, $83, $fe, $fe, $45
-meta_tiles_01:
-  .byte $fe, $00, $01, $02, $fe, $02, $75, $65, $96, $b3, $90, $02, $92, $c2, $00, $54
-meta_tiles_11:
-  .byte $fe, $00, $01, $02, $fe, $02, $76, $66, $96, $b4, $91, $02, $93, $c0, $c1, $55
+;in x = screen xpos
+;in y = screen ypos
+;out a = tile type
+.proc get_tile_type
+  scroll_xoffset = $01
+  map_data_addr = $02 ;$03
+  pos_x = $04
+  pos_y = $05
 
-; byte 2 tile types
-; xxyy zzww tile type 0 walkable, 1 solid
-; byte 3 pallete index
-; ---- --xx pallete index
-beach_tile_data:
-meta_tile_index:
-  .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-meta_tile_collision_data:
-  .byte $00, $00, $00, $55, $00, $00, $55, $00, $55, $00, $00, $00, $00, $00, $00, $00
-meta_tile_pallete_data:
-  .byte $01, $00, $01, $01, $01, $01, $01, $01, $00, $00, $00, $00, $00, $01, $01, $01
+  stx pos_x
+  sty pos_y
 
-;;RLE compression of tiles 
-; dest len data
-; -0-- ssss copy 1 byte ssss times
-; -1-- ssss literal ssss bytes
-; 1--- ---- last command for column
-beach_night_palletes:
-  .byte $0F,$08,$19,$2A,  $11,$0c,$1c,$2c,  $11,$01,$1c,$31,   $0F,$02,$12,$22
+  @load_col_offsets:
+    lda scroll_x
+    sta scroll_xoffset
+    txa                   ;move pos_x to accu
+    clc
+    adc scroll_xoffset    ;add pos x and scroll x
+    lsr
+    lsr
+    lsr
+    lsr
+    cmp #$20
+    bcc :+                ;if offset does go past nt 2
+      sec
+      sbc #$20
+    :
+    tax
+    lda ppu_ctrl_val
+    and #$01
+    beq :+
+      txa
+      clc
+      adc #$10
+      tax
+    :
+    lda map_tile_data_col_lo, x
+    sta map_data_addr
 
-;screen 1 ============================================================================
-beach_night:
-  ;.addr beach_night_col0
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $04, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $41, $0a,   $02, $01,   $c2, $08, $09
-  .byte $05, $00,   $45, $0f, $00, $05, $03, $06,   $41, $0b,   $02, $01,   $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $41, $0c,   $02, $01,   $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-;screen 2 ============================================================================
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $41, $0a,   $02, $01,   $c2, $08, $09
-  .byte $05, $00,   $45, $0f, $00, $05, $03, $06,   $41, $0b,   $02, $01,   $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $41, $0c,   $02, $01,   $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $04, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-;screen 3 ============================================================================
-  .byte $07, $00,   $43, $05, $03, $06,   $41, $0a,   $02, $01,   $c2, $08, $09
-  .byte $05, $00,   $45, $0f, $00, $05, $03, $06,   $41, $0b,   $02, $01,   $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $41, $0c,   $02, $01,   $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $04, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-  .byte $06, $00,   $44, $04, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $07, $00,   $43, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0d, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-  .byte $05, $00,   $45, $0e, $00, $05, $03, $06,   $03, $01,    $c2, $08, $09
-
-
-
-
-.proc tempTrash
-	; .byte $fe, $fe,   $fe, $fe		;$00 pure blank, sky
-	; .byte $00, $00,   $00, $00		;$01 full 3
-	; .byte $01, $01,   $01, $01		;$02 full 2
-	; .byte $02, $02,   $02, $02		;$03 full 1
-	; .byte $73, $fe,   $fe, $fe		;$04 full blank 1 star
-	; .byte $b2, $b2,   $36, $36		;$05 sea horizon
-	; .byte $65, $66,   $75, $76		;$06 sea foam pulled
-	; .byte $36, $36,   $65, $66		;$07 sea foam full
-	; .byte $86, $86,   $96, $96		;$08 full 3 dithered 2
-	; .byte $a3, $a4,   $b3, $b4		;$09 rock
-	; .byte $80, $81,   $90, $91		;$0a left hole
-	; .byte $a0, $a1,   $02, $02		;$0b middle hole
-	; .byte $82, $83,   $92, $93		;$0c right hole
-  ; .byte $fe, $fe,   $c2, $c0    ;$0d cloud left
-  ; .byte $b1, $fe,   $00, $c1    ;$0e cloud right
-  ; .byte $44, $45,   $54, $55    ;$0f moon
-  
-  ; .byte $00, $00, $01  ;$00 pure blank, sky
-	; .byte $01, $00, $00  ;$01 full 3, basic floor
-	; .byte $02, $00, $01  ;$02 full 2
-	; .byte $03, $55, $01  ;$03 full 1 / sea
-	; .byte $04, $00, $01  ;$04 blank star
-	; .byte $05, $00, $01  ;$05 sea horizon
-	; .byte $06, $55, $01  ;$06 sea foam pulled
-	; .byte $07, $55, $01  ;$07 sea foam full
-	; .byte $08, $00, $00  ;$08 full 3 dithered 2
-	; .byte $09, $55, $00  ;$09 rock
-	; .byte $0a, $00, $00  ;$0a left hole
-	; .byte $0b, $00, $00  ;$0b middle hole
-	; .byte $0c, $00, $00  ;$0c right hole
-  ; .byte $0d, $00, $01  ;$0d cloud left
-  ; .byte $0e, $00, $01  ;$0e cloud right
-  ; .byte $0f, $00, $01  ;$0f moon
-
-
-  ; ldy #0
-  ; @tile_loop_col:
-  ;   lda buffer_row_index
-  ;   sta PPUADDR
-  ;   lda buffer_col_index
-  ;   sta PPUADDR
-
-  ;   ;get top-left
-  ;   lda (map_pointer), y
-  ;   and %00000011
-  ;   sta pallete_buffer_index
-  ;   ;top-right
-  ;   clc
-  ;   lda (map_pointer+$01), y
-  ;   rol
-  ;   rol
-  ;   ora pallete_buffer_index
-  ;   sta pallete_buffer_index
-  ;   ;bottom left
-  ;   lda (map_pointer+$10), y
-  ;   clc
-  ;   rol
-  ;   rol  
-  ;   rol
-  ;   rol
-  ;   ora pallete_buffer_index
-  ;   sta pallete_buffer_index
-  ;   ;bottom right
-  ;   lda (map_pointer+$11), y
-  ;   clc
-  ;   ror
-  ;   ror
-  ;   ror
-  ;   ora pallete_buffer_index
-
-  ;   sta PPUDATA
-  ;   lda buffer_col_index
-  ;   clc
-  ;   adc #$08
-  
-  ;   sta buffer_col_index
-  ;   bcc :+
-  ;     inc buffer_row_index
-  ;   :
-
-  ;   cmp #$e0
-  ;   beq @exit_palette_placement
-
-  ;   tya
-  ;   clc
-  ;   adc #$08
-  ;   tay
-
-  ;   jmp @tile_loop_col
-
-  ; @exit_palette_placement:
-  ;   ;inc buffer_row_index
-  ;   lda map_pointer
-  ;   clc
-  ;   adc #$20
-  ;   sta map_pointer
-  ;   bcc :+
-  ;     inc map_pointer+1
-  ;   :
+    ldy #$04
+    cpx #map_tile_data_col_hi_offset
+    bcc :+
+      iny
+    :
+    sty map_data_addr+1
     
-    ; .proc decode_pallete
-    ;    ldy #0
-    ;   @decode_column_loop:
-    ;     lda (pallete_pointer), y
-    ;     sta rle_buffer
-    ;     bit rle_buffer              ;check rle type (copy/literal)
-    ;     bvs @place_literal          ;if bit 6 set do placing literal
-    ;     @copy_byte:
-    ;     lda (pallete_pointer), y        ;load len
-    ;     and #$3f                    ;remove first two bits to get actual length
-    ;     clc
-    ;     adc place_count
-    ;     sta place_count
+    ldy pos_y
+    tya
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
 
-    ;     iny                         ;move pointer to tile data
-    ;     clc
-    ;     lda (pallete_pointer), y        ;load actual tile data
-    ;     @copy_loop:
-    ;       sta map_pallete_data, x
-    ;       inx
-    ;       cpx place_count
-    ;       bne @copy_loop
-    ;       iny
-    ;       jmp @check_end_decode
+    dey
+    dey
+    dey
+    lda (map_data_addr), y
+    tax
+    lda meta_tile_collision_data, x
+    sta tempX
+      
+    lda pos_x
+    and #$04      ;check if x is at 0 or 1 column
+    lsr
+    lsr
+    sta tempY
+    lda pos_y
+    and #$04
+    lsr
+    ora tempY
+    tax
+    lda tempX
+    and tile_collision_mask, x
 
-    ;     @place_literal:
-    ;     lda (pallete_pointer), y        ;load len
-    ;     and #$3f                    ;remove first two bits to get actual length
-    ;     clc
-    ;     adc place_count
-    ;     sta place_count
-    ;     @literal_loop:
-    ;       iny
-    ;       clc
-    ;       lda (pallete_pointer), y
-    ;       sta map_pallete_data, x
-    ;       inx
-    ;       cpx place_count
-    ;       bne @literal_loop
-    ;       iny
+  rts
+.endproc
 
-    ;   @check_end_decode:
-    ;     bit rle_buffer              ;check rle type (copy/literal)
-    ;     bmi @exit_rle_decode        ;if bit 7 set exit column
-    ;     jmp @decode_column_loop
-    ;   @exit_rle_decode:
-    ;     clc
-    ;     tya
-    ;     adc pallete_pointer
-    ;     sta pallete_pointer
-    ;     bcc :+
-    ;       inc pallete_pointer+1
-    ;     :
-    ;     inx
-    ;     stx place_count
-    ;     rts
-    ; .endproc
 
-    ; @place_pallete:
-    ;   ldy #0
-    ;   lda (map_pointer), y
-    ;   @pallete_loop:
-    ;     bit pallete_buffer_index
-    ;     bmi @load_pallete_right
-    ;     bvs @load_pallete_lower_left
-    ;     @load_pallete_upper_left:
-            
-            
-            
-    ;     @load_pallete_lower_left
+.proc draw_ui
+  lda ppu_ctrl_val
+  and #<~VRAM_DOWN
+  sta PPUCTRL
+  sta ppu_ctrl_val
 
-    ;     @load_pallete_right:
-    ;     bit pallete_buffer_index
-    ;     bvs @load_pallete_lower_right
-    ;     @load_pallete_upper_right
+  bit PPUSTATUS
+  lda #$20
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
 
-    ;     @load_pallete_lower_right:
+  ldx #$c0
+  lda #$02
+  @ui_tile_draw_loop:
+    sta PPUDATA
+    dex
+    bne @ui_tile_draw_loop
 
-  .endproc
+  bit PPUSTATUS
+  lda #$23
+  sta PPUADDR
+  lda #$c0
+  sta PPUADDR
+
+  ldx #$10
+  lda #$00
+  @ui_palette_draw_loop:
+    sta PPUDATA
+    dex
+    bne @ui_palette_draw_loop
+
+
+  bit PPUSTATUS
+  lda #$20
+  sta PPUADDR
+  lda #$42
+  sta PPUADDR
+
+  lda #$e1
+  sta PPUDATA
+  lda #$e4
+  sta PPUDATA
+  lda #$ef
+  sta PPUDATA
+
+  bit PPUSTATUS
+  lda #$24
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+
+  ldx #$c0
+  lda #$02
+  @ui_tile_draw_loop2:
+    sta PPUDATA
+    dex
+    bne @ui_tile_draw_loop2
+
+  bit PPUSTATUS
+  lda #$24
+  sta PPUADDR
+  lda #$c0
+  sta PPUADDR
+
+  ldx #$10
+  lda #$aa
+  @ui_palette_draw_loop2:
+    sta PPUDATA
+    dex
+    bne @ui_palette_draw_loop2
+  
+  rts
+.endproc
+
+
+.segment "RODATA"
+  map_tile_data_col_lo:                 ;||
+    .byte $00, $0c, $18, $24, $30, $3c, $48, $54,   $60, $6c, $78, $84, $90, $9c, $a8, $b4
+    .byte $c0, $cc, $d8, $e4, $f0, $fc, $08, $14,   $20, $2c, $38, $44, $50, $5c, $68, $74
+
+  tile_collision_mask:
+    .byte $c0, $30, $0c, $03
+
+  .export level_player_spawn_x, level_player_spawn_y
+  level_player_spawn_x:
+    .byte $20
+  level_player_spawn_y:
+    .byte $c8    
+
+  level_rle_addr_lo:
+    .byte <level_cave_tile_rle
+  level_rle_addr_hi:
+    .byte >level_cave_tile_rle
+
+  sprites_palette:
+    .byte $0F,$07,$1B,$37,  $0F,$06,$16,$26,  $0F,$0A,$1A,$2A,  $0F,$02,$12,$22
+
+  level_palettes:
+  caves_palette:
+    .byte $0F,$0F,$19,$20,  $0f,$00,$10,$30,  $0f,$0c,$1c,$3c,  $0f,$01,$21,$31
+  beach_night_palletes:
+    .byte $0F,$08,$19,$2A,  $0F,$0c,$1c,$2c,  $0F,$01,$1c,$31,  $0F,$02,$12,$3c
+  
+  ui_tile_data:
+  ui_meta_tiles:
+    .byte 03
+  ui_meta_tile_collisions:
+    .byte 00
+  ui_meta_tile_palette:
+    .byte 02
+
+  ;tile compression/meta-tiles
+  ;byte 0-3 sprite/cell index, 
+  ;00 10
+  ;01 11
+  ;RLE compression of tiles 
+  ; dest len data
+  ; -0-- ssss copy 1 byte ssss times
+  ; -1-- ssss literal ssss bytes
+  ; 1--- ---- last command for column
+
+  ;tile data ============================
+    ;beach tiles
+      ;$01  =   full 3
+      ;$02  =   full 2
+      ;$03  =   full 1
+      ;$04  =   full blank 1 star
+      ;$05  =   sea horizon
+      ;$06  =   sea foam pulled
+      ;$07  =   sea foam full
+
+      ;$08  =   full 3 dithered 2
+      ;$09  =   floor edge rock
+      ;$0a  =   left hole
+      ;$0b  =   middle hole
+      ;$0c  =   right hole
+      ;$0d  =   cloud left
+      ;$0e  =   cloud right
+      ;$0f  =   moon
+    ;cave tiles
+      ;$10  =   floor right
+      ;$11  =   floor left
+      ;$12  =   up edge floor left
+      ;$13  =   up edge floor right
+      ;$14  =   right edge floor slant
+      ;$15  =   left edge floor slant
+      ;$16  =   upper head rock
+      ;$17  =   mid head rock
+      
+      ;$18  =   bottom head rock
+      ;$19  =   up left ground rock
+      ;$1a  =   up right ground rock
+      ;$1b  =   down left ground rock
+      ;$1c  =   down right ground rock
+      ;$1d  =   edge front floor dark
+      ;$1e  =   edge front floor light
+      ;$1f  =   floor left
+
+    ;$fe = blank
+
+  meta_tiles:
+  meta_tiles_00:
+    .byte $fe, $00, $01, $02, $72, $b2, $40, $36,    $86, $60, $80, $a0, $82, $fe, $b1, $42
+    .byte $08, $0a, $0c, $0e, $2a, $2e, $2c, $4c,    $6c, $fe, $fe, $58, $5a, $6e, $4e, $44
+  meta_tiles_10:
+    .byte $fe, $00, $01, $02, $fe, $b2, $41, $36,    $86, $61, $81, $a1, $83, $fe, $fe, $43
+    .byte $09, $0b, $0d, $0f, $2b, $2f, $2d, $4d,    $6d, $7d, $fe, $59, $5b, $6f, $4f, $44
+  meta_tiles_01:
+    .byte $fe, $00, $01, $02, $fe, $02, $50, $65,    $96, $70, $90, $fe, $92, $c2, $00, $54
+    .byte $18, $1a, $1c, $1e, $3a, $3e, $3c, $5c,    $7c, $48, $4a, $68, $6a, $7e, $5e, $52
+  meta_tiles_11:
+    .byte $fe, $00, $01, $02, $fe, $02, $51, $66,    $96, $71, $91, $fe, $93, $c0, $c1, $55
+    .byte $19, $1b, $1d, $1f, $3b, $3f, $3d, $5d,    $fe, $49, $4b, $69, $6b, $7f, $5f, $53
+
+  ;meta tile data
+    ;$00  =   floor blank palette 0 for UI / walkable
+    ;$01  =   floor blank palette 1 solid
+    ;$02  =   full 3 palette 0
+    ;$03  =   full 2 palette 0
+    ;$04  =   full 1 palette 0
+    ;$05  =   full 3 palette 1
+    ;$06  =   full 2 palette 1
+    ;$07  =   full 1 palette 1
+    
+    ;$08  =   full 3 palette 2
+    ;$09  =   full 2 palette 2
+    ;$0a  =   full 1 palette 2
+    ;$0b  =   full 3 palette 3
+    ;$0c  =   full 2 palette 3
+    ;$0d  =   full 1 palette 3
+    ;$0e  =   edge floor slant right
+    ;$0f  =   edge floor slant left
+
+    ;$10  =   floor right
+    ;$11  =   floor left
+    ;$12  =   up edge floor left
+    ;$13  =   up edge floor right
+    ;$14  =   right edge floor slant
+    ;$15  =   left edge floor slant
+    ;$16  =   upper head rock
+    ;$17  =   mid head rock
+    
+    ;$18  =   bottom head rock
+    ;$19  =   up left ground rock
+    ;$1a  =   up right ground rock
+    ;$1b  =   down left ground rock
+    ;$1c  =   down right ground rock
+    ;$1d  =   edge front floor dark
+    ;$1e  =   edge front floor light
+    ;$1f  =   floor left
+
+    ;$20  =   hole left level 1 cave
+    ;$21  =   hole middle level 1 cave
+    ;$22  =   hole right level 1 cave
+    ;$23  =   floor edge rock
+    ;$24  =   floor blank palette 2 solid
+    ;$25  =   floor blank palette 3 solid
+
+  meta_tile_index:
+    .byte $00, $00, $01, $02, $03, $01, $02, $03,   $01, $02, $03, $01, $02, $03, $00, $00
+    .byte $10, $11, $12, $13, $14, $15, $16, $17,   $18, $19, $1a, $1b, $1c, $1d, $1e, $1f
+    .byte $0a, $0b, $0c, $09, $00, $00, $09
+  meta_tile_collision_data:
+    .byte $00, $55, $00, $00, $00, $00, $00, $00,   $00, $00, $00, $00, $00, $00, $00, $00  
+    .byte $00, $00, $00, $00, $55, $55, $00, $00,   $00, $55, $55, $55, $55, $55, $55, $02  
+    .byte $55, $55, $55, $55, $55, $55, $55
+  meta_tile_pallete_data: 
+    .byte $00, $01, $00, $00, $00, $01, $01, $01,   $02, $02, $02, $03, $03, $03, $00, $00
+    .byte $02, $02, $02, $02, $02, $02, $01, $01,   $01, $03, $03, $03, $03, $02, $02, $02  
+    .byte $02, $02, $02, $02, $02, $03, $01
+
+
+  ; x- =>   0x = copy x count     4x = literal place x count    bit 7 is last for column
+  level_cave_tile_rle:
+  ;screen 1 ============================================================================
+    .byte $44, $16, $16, $17, $18,   $04, $01,    $c4, $10, $10, $15, $23
+    .byte $43, $16, $17, $18,   $05, $01,    $c4, $11, $11, $10, $23
+    .byte $42, $16, $17,   $03, $01,    $c7, $19, $1b, $15, $10, $10, $10, $23
+    .byte $cc, $16, $17,   $01, $01,    $19, $1b, $1c, $13, $11, $11, $11, $23
+
+    .byte $cc, $16, $17,   $01, $01,    $1a, $1c, $1b, $12, $10, $10, $10, $23
+    .byte $cc, $16, $17,   $01, $01, $01,    $1a, $1c, $13, $11, $11, $11, $23
+    .byte $42, $17, $18,   $05, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $05, $01,    $c6, $19, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+    ;.byte $cc, $18,   $01, $01, $01,    $19, $1b, $1c, $13, $11, $11, $14, $1d
+    ;.byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $1e, $1e, $1e
+
+  ;screen 2 ============================================================================
+    .byte $41, $18,   $05, $01,    $c6, $1a, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $cc, $18,   $01, $01, $01,    $19, $1b, $1c, $13, $11, $11, $11, $23
+
+    .byte $cc, $18,   $01, $01, $01,    $1a, $1c, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+  ;screen 3 ============================================================================
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $1a, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $cc, $18,   $01, $01, $01,    $19, $1b, $1c, $13, $11, $11, $11, $23
+    .byte $cc, $18,   $01, $01, $01,    $1a, $1c, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $05, $01,    $c6, $19, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    
+    .byte $41, $18,   $05, $01,    $c6, $19, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+  ;screen 4 (double holes)============================================================================
+    .byte $41, $18,   $05, $01,    $c6, $1a, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $cc, $18,   $01, $01, $01,    $19, $1b, $1c, $13, $11, $20, $11, $23
+    
+    .byte $cc, $18,   $01, $01, $01,    $1a, $1c, $1b, $12, $20, $21, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $21, $01, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $21, $22, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $22, $11, $11, $23
+    
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+;screen 5 (bridge)============================================================================
+    .byte $41, $18,   $05, $01,    $c6, $1a, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $cc, $18,   $01, $01, $01,    $19, $1b, $1c, $13, $11, $11, $14, $1d
+    
+    .byte $cc, $18,   $01, $01, $01,    $1a, $1c, $1b, $12, $10, $14, $1d, $1d
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $1e, $1e, $1e
+    .byte $41, $18,   $06, $01,    $c5, $14, $10, $1e, $1e, $1e
+    .byte $41, $18,   $06, $01,    $c5, $01, $11, $1e, $15, $23
+    
+    .byte $41, $18,   $06, $01,    $c5, $01, $10, $15, $10, $23
+    .byte $41, $18,   $06, $01,    $c5, $01, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $15, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+
+  ;screen 6 boss screen ============================================================================
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $03, $01,    $c8, $19, $1b, $1c, $13, $11, $11, $11, $23
+
+    .byte $41, $18,   $03, $01,    $c8, $1a, $1c, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+    .byte $41, $18,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $41, $18,   $05, $01,    $c6, $19, $13, $11, $11, $11, $23
+    
+    .byte $41, $18,   $04, $01,    $c7, $19, $1b, $12, $10, $10, $10, $23
+    .byte $41, $18,   $04, $01,    $c7, $1a, $1c, $13, $11, $11, $11, $23
+    .byte $41, $16,   $06, $01,    $c5, $12, $10, $10, $10, $23
+    .byte $42, $16, $17,   $05, $01,    $c5, $13, $11, $11, $11, $23
+
+    .byte $42, $16, $17,   $04, $01,    $c6, $19, $12, $10, $10, $10, $23
+    .byte $cc, $16, $17,   $01, $01, $01,   $19, $1b, $13, $11, $11, $14, $1d
+    .byte $cc, $16, $17, $18,   $01, $01,   $1a, $1c,   $12, $10, $10, $1e, $1e
+    .byte $cc, $16, $16, $17, $18,    $01,    $1a, $1c,     $14, $11, $11, $1e, $1e
+
+    .byte $ff

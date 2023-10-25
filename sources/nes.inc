@@ -36,6 +36,8 @@ TINT_R = $20
 TINT_G = $40
 TINT_B = $80
 
+OAM_RAM = $0200
+
 PPUSTATUS = $2002
 OAMADDR = $2003
 ; Don't worry about $2004; let OAM_DMA do the work for you.
@@ -56,5 +58,35 @@ KEY_UP     = %00001000
 KEY_DOWN   = %00000100
 KEY_LEFT   = %00000010
 KEY_RIGHT  = %00000001
+
+.scope GameState
+    MainMenu = $00
+    CharSelect = $01
+    LevelPlay = $02
+    LevelWin = $03
+    LevelLose = $04
+.endscope
+
+.scope SpriteAttrib
+    Palette0 = $00
+    Palette1 = $01
+    Palette2 = $02
+    Palette3 = $03
+
+    BGPriority = $20
+    FlipX    = $40
+    FlipY    = $80
+.endscope
+
+.scope BGFlags
+    nametable_buffered = $80
+    attribtable_buffered = $40
+.endscope
+
+.scope LevelFlags
+    CanScroll = $80
+    LastColumnLoaded = $40
+.endscope
+
 
 .endif

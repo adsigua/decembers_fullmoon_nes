@@ -1,7 +1,6 @@
 .include "nes.inc"
 .include "global.inc"
-
-.export init_entities
+.include "entity.inc"
 
 ;.segment "ZEROPAGE"
 .segment "CODE"
@@ -18,7 +17,7 @@
     sta (tempX), y
     dey
     bne @clear_entity_loop
-    rts 
+  rts 
 .endproc
 
 .proc init_entities
@@ -50,13 +49,12 @@
     lda entity_type, x                ;check entity behaviour type
     and #$f0
     cmp #EntityType::player_type
+    ;cmp #$01
     beq @update_player_entity
     jmp @no_update
 
     @update_player_entity:
-      jsr apply_player_velocity
-      jsr update_player_animation
-      jsr update_player_oam_buffer
+      jsr update_player_entity
       jmp @no_update
       
     @no_update:
@@ -102,112 +100,6 @@
 
   @end_velocity_apply:
 
-  rts
-.endproc
-
-;  .proc bound_position_x
-;     ldy #Entity_moving::pos_x_hi
-;     lda (curr_entity_state), y
-;     ldy #Entity_moving::screen_pos_x
-;     sta (curr_entity_state), y
-
-;     ldy #Entity_moving::entity_state
-;     lda (curr_entity_state), y
-;     sta curr_entity_facing
-;     ; ora #$40
-;     ; sta (curr_entity_state), y
-;     rts
-
-;   ; temp_pos_lo = $0d   ;just temporary zp values
-;   ; temp_pos_hi = $0e
-;   ;     ; Convert the fixed point position coordinate into screen coordinates
-;   ;     ldy #Entity_moving::pos_x_lo
-;   ;     lda (curr_entity_state), y
-;   ;     sta temp_pos_lo
-;   ;     ldy #Entity_moving::pos_x_hi
-;   ;     lda (curr_entity_state), y
-;   ;     sta temp_pos_hi
-;   ;     lsr temp_pos_hi
-;   ;     ror temp_pos_lo
-;   ;     lsr temp_pos_hi
-;   ;     ror temp_pos_lo
-;   ;     lsr temp_pos_hi
-;   ;     ror temp_pos_lo
-;   ;     lsr temp_pos_hi
-;   ;     ror temp_pos_lo
-;   ;     ; Assume that everything is fine and save the sprite position
-;   ;     lda temp_pos_lo
-;   ;     ldy #Entity_moving::screen_pos_x
-;   ;     sta (curr_entity_state), y
-;       ; Check if we are moving left or right (negative or positive respectively)
-;      ; lda player_dxlo
-;      ; bmi @negative
-;     ; @positive:
-;     ;   lda temp_pos_hi
-;     ;   bne @bound_upper
-;     ;   lda temp_pos_lo
-;     ;   cmp #239
-;     ;   bcs @bound_upper
-;     ;   rts
-;     ; @bound_upper:
-;     ;   ; $EF = 239 = 255 - 16, this is the right bound since the screen is 256 pixels
-;     ;   ; wide and the character is 16 pixels wide.
-;     ;   lda #$EF
-;     ;   sta entities_list+Entity::sprite_x
-;     ;   lda #$0E
-;     ;   sta player_pos_xhi
-;     ;   lda #$F0
-;     ;   sta player_pos_xlo
-;     ;   ; Finally, set the velocity to 0 since the player is being "stopped"
-;     ;   lda #0
-;     ;   sta player_dxlo
-;     ;   rts
-;     ; @negative:
-;     ;   ; The negative case is really simple, just check if the high order byte of the
-;     ;   ; 12.4 fixed point position is negative. If so bound everything to 0.
-;     ;   lda player_pos_xhi
-;     ;   bmi @bound_lower
-;     ;   rts
-;     ; @bound_lower:
-;     ;   lda #0
-;     ;   sta player_pos_xlo
-;     ;   sta player_pos_xhi
-;     ;   sta entities_list+Entity::sprite_x
-;     ;   sta player_dxlo
-;     ;   rts
-;  .endproc
-
-;  .proc bound_position_y
-;     ldy #Entity_moving::pos_y_hi
-;     lda (curr_entity_state), y
-;     ldy #Entity_moving::screen_pos_y
-;     sta (curr_entity_state), y
-
-;     ldy #Entity_moving::entity_state
-;     lda (curr_entity_state), y
-;     ; ora #$40
-;     ; sta (curr_entity_state), y
-;     rts
-;  .endproc
-
-.proc update_oam
-  ldy oam_counter
-  lda oam_buffer
-  sta OAM, y          
-
-  lda oam_buffer+1
-  sta OAM+1, y          
-
-  lda oam_buffer+2
-  sta OAM+2, y      
-  
-  lda oam_buffer+3
-  sta OAM+3, y      
-
-  inc oam_counter
-  inc oam_counter
-  inc oam_counter
-  inc oam_counter
   rts
 .endproc
 

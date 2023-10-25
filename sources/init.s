@@ -1,11 +1,11 @@
 .include "nes.inc"
 .include "global.inc"
-.export reset_handler
+.include "entity.inc"
 
 .proc reset_handler 
   ; The very first thing to do when powering on is to put all sources
   ; of interrupts into a known state.
- 
+
   sei		; disable IRQs
   cld		; disable decimal mode
   ldx PPUCTRL

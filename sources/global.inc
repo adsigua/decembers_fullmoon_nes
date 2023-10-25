@@ -6,19 +6,19 @@
 
 ; main.s
 .global main, nmi_handler, irq_handler
-.global OAM, identity_table
-.globalzp oam_counter, oam_buffer
+.global identity_table
+.globalzp ppu_ctrl_val, ppu_mask_val
 
 ;entities.s
-.global init_entities, update_entities, update_oam
+.global init_entities, update_entities, update_oam, get_tile_type
 
 ;player.s
-.global init_player_entity, update_player, apply_player_velocity
-.global update_player_animation, update_player_oam_buffer
+.global update_player, update_player_entity, init_player_entity
 
-
-; ppuclear.s
+; ppu
 .global ppu_clear_nt, ppu_clear_oam, ppu_screen_on
+.global update_oam_buffer, send_oam_dma, place_sprite_0
+.globalzp oam_counter, oam_buffer
 
 ; pads.s
 .global read_pads
@@ -29,54 +29,9 @@
 .globalzp col_pointer
 
 ;level .s
-.global init_scroll, check_update_bg_scroll, update_scroll
-.globalzp level_flags, scroll_x, scroll_x_lo
-
-
-;entity state
-;low nib = EntityState
-;hi nib flags
-;x---   there was a state change
-;-x--   facing left of right   
-;--x-   there was sprite update
-.struct Entity
-    type                    .byte
-    entity_id               .byte       ;index based on type 
-    entity_state            .byte
-    entity_anim_num         .byte
-    entity_anim_delay_cnt   .byte
-    screen_pos_x    .byte
-    screen_pos_y    .byte
-    velocity_x      .byte
-    velocity_y      .byte
-    pos_x_lo        .byte
-    pos_y_lo        .byte
-.endstruct
-
-.scope EntityType
-    none_type = $00
-    player_type = $10
-    enemy_type = $20
-    player_projectile = $30
-    enemy_projectile = $40
-.endscope
-
-.scope EntityBehaviourType
-    static_still = $00
-    moving_animated = $01
-    static_animated = $02
-    moving_still = $03
-.endscope
-
-.scope EntityState
-    Idle = $00
-    Moving = $01
-    Attacking = $02
-    Defending = $03
-    Hurt = $04
-    Dying = $06
-    Dead = $07
-.endscope
+.global init_level_manager, init_level, init_player_pos
+.global init_scroll, check_update_bg_scroll, update_scroll, apply_scroll_x
+.globalzp level_index, level_flags, scroll_x
 
 ;entity addresses======================================================
     entity_addr = $300
@@ -96,18 +51,17 @@
 
     curr_entity_index = $00
 
-    curr_entity_type = $01
-    curr_entity_state = $02       
-    curr_entity_id = $03
-    curr_entity_anim_id = $04
-    curr_entity_anim_frame_id = $05
-
     tempX = $0c
     tempY = $0d
     tempZ = $0e
     tempW = $0f
 
+;player collision=====================================================
+    
+
+
 ;level addresses======================================================
+
 
 
 ;trash ==============================================

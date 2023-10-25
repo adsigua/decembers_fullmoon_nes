@@ -15,107 +15,127 @@
 .word irq_handler
 
 .segment "STARTUP"
-OAM = $0200
 
 .segment "ZEROPAGE"
 varSpace:       .res 16
 
+game_state:     .res 1
 nmi_count:      .res 1
-oam_counter:    .res 2
-oam_buffer:     .res 4
-;oam_used:   .res 2  ; starts at 0
+ppu_ctrl_val:   .res 1
+ppu_mask_val:   .res 1
 
 .segment "CODE"
-;;
+
 .proc irq_handler
   rti
 .endproc
 
 .proc nmi_handler
-  pha
-  txa
-  pha
-  tya
-  pha
-  inc nmi_count
-  pla
-  tay
-  pla
-  tax
-  pla
-  rti
+  ; pha
+  ; txa
+  ; pha
+  ; tya
+  ; pha
+  ; inc nmi_count
+  ; pla
+  ; tay
+  ; pla
+  ; tax
+  ; pla
+  ; rti
 
+  inc nmi_count
   rti
 .endproc
 
 .proc main
-  jsr load_main_palette
+  lda #BG_1000
+  sta PPUCTRL   
+  sta ppu_ctrl_val 
+
+  ; Set up game variables
+  jsr init_level
   jsr draw_bg
-  
-  ; Set up game variables, as if it were the start of a new level.
+
   jsr init_entities
   jsr init_scroll
 
   jsr ppu_clear_oam
+  jsr ppu_screen_on
 
-  lda #%10010100	; Enable NMI (specifically enable generation of an interrupt at vblank interval)
-  sta PPUCTRL     ; store it on PPUCTRL
-  lda #%00011110	; Enable sprite rendering, bit 5 on PPUMASK
-  sta $2001       ; PPUMASK
+  @game_loop:
+    jsr read_pads
+    
+    ldx #$f8
+    ldy #$28
+    jsr place_sprite_0
 
-@game_loop:
-  ;read inputs
-  jsr read_pads
-
-  ; The first entry in OAM (indices 0-3) is "sprite 0".
-  ; lda #$ff
-  ; sta OAM+1
-  lda #%00100000
-  sta OAM+2
-  lda #4
-  sta oam_counter
-
-  ;do updating player updates
-  jsr update_player
-  jsr update_entities
-  jsr check_update_bg_scroll
-
-  ;clear oam for later
-  ldx oam_counter
+    ;do updating player updates
+    jsr update_player
+    jsr update_entities
+    jsr check_update_bg_scroll
 
   lda nmi_count
-@check_nmi_loop:
-  cmp nmi_count
-  beq @check_nmi_loop
-  
+  @check_nmi_loop:
+    cmp nmi_count
+    beq @check_nmi_loop
 
-  ; Copy the display list from main RAM to the PPU
-  lda #0
-  sta OAMADDR
-  lda #>OAM
-  sta OAM_DMA
+    jsr send_oam_dma
 
-  jsr draw_column
-  jsr update_scroll
+    jsr draw_column
+    jsr update_scroll
 
-  jmp @game_loop
-  rts
+    jmp @game_loop
+    rts
 .endproc
 
-.proc load_main_palette
-  ; seek to the start of palette memory ($3F00-$3F1F)
-  ldx #$3F
-  stx PPUADDR
-  ldx #$00
-  stx PPUADDR
-copypalloop:
-  lda initial_palette,x
-  sta PPUDATA
-  inx
-  cpx #32
-  bcc copypalloop
-  rts
+.proc level_loop
+  lda #BG_1000
+  sta PPUCTRL   
+  sta ppu_ctrl_val 
+
+  ; Set up game variables
+  jsr init_level
+  jsr draw_bg
+
+  jsr init_entities
+  jsr init_scroll
+
+  jsr ppu_clear_oam
+  jsr ppu_screen_on
+
+  @level_loop:
+    jsr read_pads
+    
+    ; The first entry in OAM_RAM (indices 0-3) is "sprite 0".
+    lda #4
+    sta oam_counter
+
+    ;do updating player updates
+    jsr update_player
+    jsr update_entities
+    jsr check_update_bg_scroll
+
+  lda nmi_count
+  @check_nmi_loop:
+    cmp nmi_count
+    beq @check_nmi_loop
+
+    jsr send_oam_dma
+
+    jsr draw_column
+    jsr update_scroll
+
+    jmp @level_loop
+
+  @level_win:
+
+    rts
+  @level_lose:
+
+    rts
 .endproc
+
 
 .segment "RODATA"
 identity_table:
@@ -136,11 +156,6 @@ identity_table:
     .byte $e0,$e1,$e2,$e3,$e4,$e5,$e6,$e7,$e8,$e9,$ea,$eb,$ec,$ed,$ee,$ef
     .byte $f0,$f1,$f2,$f3,$f4,$f5,$f6,$f7,$f8,$f9,$fa,$fb,$fc,$fd,$fe,$ff
     
-initial_palette:
-  ;.byte $0F,$08,$19,$2A,  $11,$0c,$1c,$2c,  $11,$01,$1c,$31,   $0F,$02,$12,$22
-  .byte $11,$0c,$1c,$2c,   $11,$01,$1c,$31,  $0F,$08,$19,$2A,  $0F,$02,$12,$22
-  .byte $11,$07,$1B,$37,   $0F,$06,$16,$26,  $0F,$0A,$1A,$2A,  $0F,$02,$12,$22
-
 ; Include the CHR ROM data
 .segment "CHARS"
   .incbin "../obj/decembersfullmoon.chr"
