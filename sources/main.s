@@ -60,15 +60,16 @@ ppu_mask_val:   .res 1
   jsr init_entities
   jsr init_scroll
 
-  jsr ppu_clear_oam
   jsr ppu_screen_on
 
   @game_loop:
+    jsr ppu_clear_oam
     jsr read_pads
     
     ldx #$f8
     ldy #$28
     jsr place_sprite_0
+
 
     ;do updating player updates
     jsr update_player

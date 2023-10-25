@@ -208,6 +208,7 @@ bottom_floor_limit = $de
   ldy entity_anim_id
   lda (tempX), y
   sta entity_anim_delay_cnt
+  stx entity_anim_frame_id
   rts
 .endproc
 
@@ -469,88 +470,43 @@ bottom_floor_limit = $de
   player_meta_sprite_index = $06
   sprite_count = $07
   pallete_index = $08
+  tempAddr_lo = tempX
+  tempAddr_hi = tempX+1
+  oamAttrbTemp = tempZ
+  xOffsetTemp = tempZ
 
   ldx entity_anim_frame_id
   ldy entity_anim_id
 
   lda player_anim_frame_palette_addr_lo, X
-  sta tempX
+  sta tempAddr_lo
   lda player_anim_frame_palette_addr_hi, X
-  sta tempX+1
+  sta tempAddr_hi
 
-  lda (tempX), y
+  lda (tempAddr_lo), y
   sta pallete_index
 
   lda player_anim_frame_metasprite_addr_lo, x
-  sta tempX
+  sta tempAddr_lo
   lda player_anim_frame_metasprite_addr_hi, x
-  sta tempX+1
+  sta tempAddr_hi
 
-  lda (tempX), y
+  lda (tempAddr_lo), y
   sta player_meta_sprite_index
 
-  ldx player_index
-  lda player_meta_sprites_sprite_count, x
+  lda player_anim_frame_sprite_count_addr_lo, x
+  sta tempAddr_lo
+  lda player_anim_frame_sprite_count_addr_hi, x
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y
   sta sprite_count
 
-  ;ldx #0
+  ;sprite number
+  ldx #0
 
   @draw_entity_loop:
-    ;y-pos
-    lda player_metasprite_y_offset_addr_lo, x
-    sta tempX
-    lda player_metasprite_y_offset_addr_hi, x
-    sta tempX+1
-
-    ldy #0
-    lda (tempX), y    
-    clc                  
-    adc entity_pos_y
-    sta oam_buffer
-
-    ;sprite index
-    lda player_metasprite_index_addr_lo, x
-    sta tempX
-    lda player_metasprite_index_addr_hi, x
-    sta tempX+1
-
-    ldy player_meta_sprite_index
-    lda (tempX), y        
-    sta oam_buffer+1
-
-    ;flags (palette, flipping and bg priority)
-    lda pallete_index
-    sta tempZ
-    lda entity_state
-    and #SpriteAttrib::FlipX
-    ora tempZ
-    sta oam_buffer+2             
-
-    ;x pos and offset
-    lda player_metasprite_x_offset_addr_lo, x
-    sta tempX
-    lda player_metasprite_x_offset_addr_hi, x
-    sta tempX+1
-
-    ldy #0
-    lda (tempX), y 
-    sta tempZ     
-
-    lda entity_pos_x
-    bit entity_state
-    bvs @is_flipped
-    @not_flipped:
-      clc
-      adc tempZ
-      jmp @place_x_offset_to_buffer
-    @is_flipped:
-      sec
-      sbc tempZ   
-      clc
-      adc #sprite_width
-    @place_x_offset_to_buffer:
-      sta oam_buffer+3
-
+    jsr draw_entity
   @place_buffer_to_oam:
     jsr update_oam_buffer
     inx
@@ -559,6 +515,92 @@ bottom_floor_limit = $de
 
   @end_player_oam_buffer:
     rts
+.endproc
+
+.proc draw_entity
+  player_meta_sprite_index = $06
+  sprite_count = $07
+  pallete_index = $08
+  tempAddr_lo = tempX
+  tempAddr_hi = tempX+1
+  oamAttrbTemp = tempZ
+  xOffsetTemp = tempZ
+
+  ldy player_meta_sprite_index
+  ;y-pos
+  lda player_metasprite_y_offset_addr_lo, x
+  sta tempAddr_lo
+  lda player_metasprite_y_offset_addr_hi, x
+  sta tempAddr_hi
+  lda (tempAddr_lo), y    
+  bmi @negative_y_offset
+  @positive_y_offset:
+    clc                  
+    adc entity_pos_y
+    jmp @store_y_offset_buffer
+  @negative_y_offset:
+    and #$7f
+    sta tempZ
+    lda entity_pos_y
+    sec                  
+    sbc tempZ
+  @store_y_offset_buffer:
+  sta oam_buffer
+
+  ;sprite index
+  lda player_metasprite_index_addr_lo, x
+  sta tempAddr_lo
+  lda player_metasprite_index_addr_hi, x
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y        
+  sta oam_buffer+1
+
+  ;flags (palette, flipping and bg priority)
+  lda pallete_index
+  sta oamAttrbTemp
+  lda entity_state
+  and #SpriteAttrib::FlipX
+  ora oamAttrbTemp
+  sta oam_buffer+2             
+
+  ;x pos and offset
+  lda player_metasprite_x_offset_addr_lo, x
+  sta tempAddr_lo
+  lda player_metasprite_x_offset_addr_hi, x
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y 
+  bmi @negative_x_offset    
+  @positive_x_offset:
+    sta xOffsetTemp 
+    lda entity_pos_x
+    bit entity_state
+    bvs @is_plus_flipped
+    @not_plus_flipped:
+      clc
+      adc xOffsetTemp
+      jmp @place_x_offset_to_buffer
+    @is_plus_flipped:
+      sec
+      sbc xOffsetTemp   
+      jmp @place_x_offset_to_buffer
+  @negative_x_offset:
+    and #$7f
+    sta xOffsetTemp 
+    lda entity_pos_x
+    bit entity_state
+    bvs @is_neg_flipped
+    @not_neg_flipped:
+      sec
+      sbc xOffsetTemp
+      jmp @place_x_offset_to_buffer
+    @is_neg_flipped:
+      clc
+      adc xOffsetTemp   
+  @place_x_offset_to_buffer:
+    sta oam_buffer+3
+  rts
 .endproc
 
 .segment "RODATA"
@@ -596,19 +638,33 @@ player_spawn_y:
     .byte $01, $04
 
   player_anim_frame_palette_addr_lo:
-    .byte <player_anim_palette_f0, <player_anim_palette_f1, <player_anim_palette_f2, <player_anim_palette_f3, <player_anim_palette_f4, <player_anim_palette_f5
+    .byte <player_anim_palette_f0, <player_anim_palette_f1, <player_anim_palette_f2, <player_anim_palette_f3 
+    .byte <player_anim_palette_f4, <player_anim_palette_f5, <player_anim_palette_f6, <player_anim_palette_f7 
   player_anim_frame_palette_addr_hi:
-    .byte >player_anim_palette_f0, >player_anim_palette_f1, >player_anim_palette_f2, >player_anim_palette_f3, >player_anim_palette_f4, >player_anim_palette_f5
+    .byte >player_anim_palette_f0, >player_anim_palette_f1, >player_anim_palette_f2, >player_anim_palette_f3
+    .byte >player_anim_palette_f4, >player_anim_palette_f5, >player_anim_palette_f6, >player_anim_palette_f7 
   
   player_anim_frame_delay_addr_lo:
-    .byte <player_anim_delay_count_f0, <player_anim_delay_count_f1, <player_anim_delay_count_f2, <player_anim_delay_count_f3, <player_anim_delay_count_f4, <player_anim_delay_count_f5
+    .byte <player_anim_delay_count_f0, <player_anim_delay_count_f1, <player_anim_delay_count_f2, <player_anim_delay_count_f3
+    .byte <player_anim_delay_count_f4, <player_anim_delay_count_f5, <player_anim_delay_count_f6, <player_anim_delay_count_f7
   player_anim_frame_delay_addr_hi:
-    .byte >player_anim_delay_count_f0, >player_anim_delay_count_f1, >player_anim_delay_count_f2, >player_anim_delay_count_f3, >player_anim_delay_count_f4, >player_anim_delay_count_f5
+    .byte >player_anim_delay_count_f0, >player_anim_delay_count_f1, >player_anim_delay_count_f2, >player_anim_delay_count_f3
+    .byte >player_anim_delay_count_f4, >player_anim_delay_count_f5, >player_anim_delay_count_f6, >player_anim_delay_count_f7
  
   player_anim_frame_metasprite_addr_lo:
-    .byte <player_anim_meta_sprites_f0, <player_anim_meta_sprites_f1, <player_anim_meta_sprites_f2, <player_anim_meta_sprites_f3, <player_anim_meta_sprites_f4, <player_anim_meta_sprites_f5
+    .byte <player_anim_meta_sprites_f0, <player_anim_meta_sprites_f1, <player_anim_meta_sprites_f2, <player_anim_meta_sprites_f3 
+    .byte <player_anim_meta_sprites_f4, <player_anim_meta_sprites_f5, <player_anim_meta_sprites_f2, <player_anim_meta_sprites_f3 
   player_anim_frame_metasprite_addr_hi:
-    .byte >player_anim_meta_sprites_f0, >player_anim_meta_sprites_f1, >player_anim_meta_sprites_f2, >player_anim_meta_sprites_f3, >player_anim_meta_sprites_f4, >player_anim_meta_sprites_f5  
+    .byte >player_anim_meta_sprites_f0, >player_anim_meta_sprites_f1, >player_anim_meta_sprites_f2, >player_anim_meta_sprites_f3 
+    .byte >player_anim_meta_sprites_f4, >player_anim_meta_sprites_f5, >player_anim_meta_sprites_f6, >player_anim_meta_sprites_f7  
+
+  player_anim_frame_sprite_count_addr_lo:
+    .byte <player_anim_sprite_count_f0, <player_anim_sprite_count_f1, <player_anim_sprite_count_f2, <player_anim_sprite_count_f3 
+    .byte <player_anim_sprite_count_f4, <player_anim_sprite_count_f5, <player_anim_sprite_count_f2, <player_anim_sprite_count_f3 
+  player_anim_frame_sprite_count_addr_hi:
+    .byte >player_anim_sprite_count_f0, >player_anim_sprite_count_f1, >player_anim_sprite_count_f2, >player_anim_sprite_count_f3 
+    .byte >player_anim_sprite_count_f4, >player_anim_sprite_count_f5, >player_anim_sprite_count_f6, >player_anim_sprite_count_f7  
+
 
   player_anim_palette_f0:
     .byte $00, $00
@@ -616,6 +672,8 @@ player_spawn_y:
     .byte $00, $0a
   player_anim_meta_sprites_f0:
     .byte $00, $01
+  player_anim_sprite_count_f0:
+    .byte $06, $06
 
   player_anim_palette_f1:
     .byte $00, $00
@@ -623,6 +681,8 @@ player_spawn_y:
     .byte $ff, $0a
   player_anim_meta_sprites_f1:
     .byte $00, $02
+  player_anim_sprite_count_f1:
+    .byte $06, $07
 
   player_anim_palette_f2:
     .byte $00, $00
@@ -630,6 +690,8 @@ player_spawn_y:
     .byte $ff, $0a
   player_anim_meta_sprites_f2:
     .byte $00, $03
+  player_anim_sprite_count_f2:
+    .byte $06, $08
 
   player_anim_palette_f3:
     .byte $00, $00
@@ -637,6 +699,8 @@ player_spawn_y:
     .byte $ff, $0a
   player_anim_meta_sprites_f3:
     .byte $00, $02
+  player_anim_sprite_count_f3:
+    .byte $06, $08
     
   player_anim_palette_f4:
     .byte $00, $00
@@ -644,6 +708,8 @@ player_spawn_y:
     .byte $ff, $ff
   player_anim_meta_sprites_f4:
     .byte $00, $00
+  player_anim_sprite_count_f4:
+    .byte $06, $08
 
   player_anim_palette_f5:
     .byte $00, $00
@@ -651,10 +717,27 @@ player_spawn_y:
     .byte $ff, $ff
   player_anim_meta_sprites_f5:
     .byte $00, $00
+  player_anim_sprite_count_f5:
+    .byte $06, $08
 
+  player_anim_palette_f6:
+    .byte $00, $00
+  player_anim_delay_count_f6:
+    .byte $ff, $ff
+  player_anim_meta_sprites_f6:
+    .byte $00, $00
+  player_anim_sprite_count_f6:
+    .byte $06, $08
 
-player_meta_sprites_sprite_count:
-  .byte $06
+  player_anim_palette_f7:
+    .byte $00, $00
+  player_anim_delay_count_f7:
+    .byte $ff, $ff
+  player_anim_meta_sprites_f7:
+    .byte $00, $00
+  player_anim_sprite_count_f7:
+    .byte $06, $08
+
 
 ; player_metasprite_x_offset_addr_lo:
 ;   .byte <player_sprites_x_offset_00, <player_sprites_x_offset_01, <player_sprites_x_offset_02, <player_sprites_x_offset_03, <player_sprites_x_offset_04, <player_sprites_x_offset_05, <player_sprites_x_offset_06, <player_sprites_x_offset_07
@@ -666,67 +749,35 @@ player_meta_sprites_sprite_count:
 ;   .byte >player_sprites_y_offset_00, >player_sprites_y_offset_01, >player_sprites_y_offset_02, >player_sprites_y_offset_03, >player_sprites_y_offset_04, >player_sprites_y_offset_05, >player_sprites_y_offset_06, >player_sprites_y_offset_07
 
 player_metasprite_index_addr_lo:
-  .byte <player_meta_sprites_00, <player_meta_sprites_01, <player_meta_sprites_02, <player_meta_sprites_03, 
-        <player_meta_sprites_04, <player_meta_sprites_05, <player_meta_sprites_06, <player_meta_sprites_07, 
-        <player_meta_sprites_08, <player_meta_sprites_09
+  .byte <player_meta_sprites_00, <player_meta_sprites_01, <player_meta_sprites_02, <player_meta_sprites_03
+  .byte <player_meta_sprites_04, <player_meta_sprites_05, <player_meta_sprites_06, <player_meta_sprites_07
+  .byte <player_meta_sprites_08, <player_meta_sprites_09
 player_metasprite_index_addr_hi:
-  .byte >player_meta_sprites_00, >player_meta_sprites_01, >player_meta_sprites_02, >player_meta_sprites_03, 
-        >player_meta_sprites_04, >player_meta_sprites_05, >player_meta_sprites_06, >player_meta_sprites_07, 
-        >player_meta_sprites_08, >player_meta_sprites_09
+  .byte >player_meta_sprites_00, >player_meta_sprites_01, >player_meta_sprites_02, >player_meta_sprites_03
+  .byte >player_meta_sprites_04, >player_meta_sprites_05, >player_meta_sprites_06, >player_meta_sprites_07
+  .byte >player_meta_sprites_08, >player_meta_sprites_09
 
-player_metasprite_offset_x_lo:
-  .byte <player_meta_spites_x_offset_00, <player_meta_spites_x_offset_01, <player_meta_spites_x_offset_02, <player_meta_spites_x_offset_03, 
-        <player_meta_spites_x_offset_04, <player_meta_spites_x_offset_05, <player_meta_spites_x_offset_06, <player_meta_spites_x_offset_07, 
-        <player_meta_spites_x_offset_08, <player_meta_spites_x_offset_09
-player_metasprite_offset_x_hi:
-  .byte >player_meta_spites_x_offset_00, >player_meta_spites_x_offset_01, >player_meta_spites_x_offset_02, >player_meta_spites_x_offset_03, 
-        >player_meta_spites_x_offset_04, >player_meta_spites_x_offset_05, >player_meta_spites_x_offset_06, >player_meta_spites_x_offset_07, 
-        >player_meta_spites_x_offset_08, >player_meta_spites_x_offset_09
+player_metasprite_x_offset_addr_lo:
+  .byte <player_meta_spites_x_offset_00, <player_meta_spites_x_offset_01, <player_meta_spites_x_offset_02, <player_meta_spites_x_offset_03
+  .byte <player_meta_spites_x_offset_04, <player_meta_spites_x_offset_05, <player_meta_spites_x_offset_06, <player_meta_spites_x_offset_07
+  .byte <player_meta_spites_x_offset_08, <player_meta_spites_x_offset_09
+player_metasprite_x_offset_addr_hi:
+  .byte >player_meta_spites_x_offset_00, >player_meta_spites_x_offset_01, >player_meta_spites_x_offset_02, >player_meta_spites_x_offset_03 
+  .byte >player_meta_spites_x_offset_04, >player_meta_spites_x_offset_05, >player_meta_spites_x_offset_06, >player_meta_spites_x_offset_07 
+  .byte >player_meta_spites_x_offset_08, >player_meta_spites_x_offset_09
 
-player_metasprite_offset_y_lo:
-  .byte <player_meta_spites_y_offset_00, <player_meta_spites_y_offset_01, <player_meta_spites_y_offset_02, <player_meta_spites_y_offset_03, 
-        <player_meta_spites_y_offset_04, <player_meta_spites_y_offset_05, <player_meta_spites_y_offset_06, <player_meta_spites_y_offset_07, 
-        <player_meta_spites_y_offset_08, <player_meta_spites_y_offset_09
-player_metasprite_offset_y_hi:
-  .byte >player_meta_spites_y_offset_00, >player_meta_spites_y_offset_01, >player_meta_spites_y_offset_02, >player_meta_spites_y_offset_03, 
-        >player_meta_spites_y_offset_04, >player_meta_spites_y_offset_05, >player_meta_spites_y_offset_06, >player_meta_spites_y_offset_07, 
-        >player_meta_spites_y_offset_08, >player_meta_spites_y_offset_09
+player_metasprite_y_offset_addr_lo:
+  .byte <player_meta_spites_y_offset_00, <player_meta_spites_y_offset_01, <player_meta_spites_y_offset_02, <player_meta_spites_y_offset_03 
+  .byte <player_meta_spites_y_offset_04, <player_meta_spites_y_offset_05, <player_meta_spites_y_offset_06, <player_meta_spites_y_offset_07 
+  .byte <player_meta_spites_y_offset_08, <player_meta_spites_y_offset_09
+player_metasprite_y_offset_addr_hi:
+  .byte >player_meta_spites_y_offset_00, >player_meta_spites_y_offset_01, >player_meta_spites_y_offset_02, >player_meta_spites_y_offset_03 
+  .byte >player_meta_spites_y_offset_04, >player_meta_spites_y_offset_05, >player_meta_spites_y_offset_06, >player_meta_spites_y_offset_07
+  .byte >player_meta_spites_y_offset_08, >player_meta_spites_y_offset_09
 
 
 ; player_meta_sprites_offset:
-  ;   player_sprites_x_offset_00:
-  ;     .byte $00
-  ;   player_sprites_x_offset_01:
-  ;     .byte $08
-  ;   player_sprites_x_offset_02:
-  ;     .byte $00
-  ;   player_sprites_x_offset_03:
-  ;     .byte $08
-  ;   player_sprites_x_offset_04:
-  ;     .byte $00
-  ;   player_sprites_x_offset_05:
-  ;     .byte $08
-  ;   player_sprites_x_offset_06:
-  ;     .byte $00
-  ;   player_sprites_x_offset_07:
-  ;     .byte $08
-
-  ;   player_sprites_y_offset_00:
-  ;     .byte $00
-  ;   player_sprites_y_offset_01:
-  ;     .byte $00
-  ;   player_sprites_y_offset_02:
-  ;     .byte $08
-  ;   player_sprites_y_offset_03:
-  ;     .byte $08
-  ;   player_sprites_y_offset_04:
-  ;     .byte $10
-  ;   player_sprites_y_offset_05:
-  ;     .byte $10
-  ;   player_sprites_y_offset_06:
-  ;     .byte $00
-  ;   player_sprites_y_offset_07:
-  ;     .byte $08
+  ;   
 
 
           ;id  w00  w01  w02
@@ -734,28 +785,28 @@ player_meta_sprites_index:
   player_meta_sprites_00:
     .byte $00, $00, $02, $00
   player_meta_spites_x_offset_00:
-    .byte $00, $00, $00, $00
+    .byte $84, $84, $84, $84
   player_meta_spites_y_offset_00:
     .byte $00, $00, $00, $00
 
   player_meta_sprites_01:
     .byte $01, $01, $03, $01
   player_meta_spites_x_offset_01:
-    .byte $08, $08, $08, $08
+    .byte $04, $04, $04, $04
   player_meta_spites_y_offset_01:
     .byte $00, $00, $00, $00
 
   player_meta_sprites_02:
     .byte $14, $14, $12, $10
   player_meta_spites_x_offset_02:
-    .byte $00, $00, $00, $00
+    .byte $84, $84, $84, $84
   player_meta_spites_y_offset_02:
     .byte $08, $08, $08, $08
 
   player_meta_sprites_03:
     .byte $15, $15, $13, $11
   player_meta_spites_x_offset_03:
-    .byte $08, $08, $08, $08
+    .byte $04, $04, $04, $04
   player_meta_spites_y_offset_03:
     .byte $08, $08, $08, $08
 
@@ -764,30 +815,30 @@ player_meta_sprites_index:
   player_meta_sprites_04:
     .byte $20, $24, $22, $20
   player_meta_spites_x_offset_04:
-    .byte $00, $00, $00, $00
+    .byte $84, $84, $84, $84
   player_meta_spites_y_offset_04:
     .byte $10, $10, $10, $10
 
   player_meta_sprites_05:
     .byte $21, $25, $23, $21
   player_meta_spites_x_offset_05:
-    .byte $08, $08, $08, $08
+    .byte $04, $04, $04, $04
   player_meta_spites_y_offset_05:
     .byte $10, $10, $10, $10
 
   player_meta_sprites_06:
-    .byte $2a, $00, $00, $00
+    .byte $ff, $ff, $2b, $2a
   player_meta_spites_x_offset_06:
-    .byte $00, $00, $00, $00
-  player_meta_spites_y_offset_06:
-    .byte $18, $00, $00, $00
+    .byte $00, $00, $87, $89
+  player_meta_spites_y_offset_06: 
+    .byte $0b, $0b, $05, $05
 
   player_meta_sprites_07:
-    .byte $1a, $00, $00, $00
+    .byte $ff, $ff, $ff, $1a
   player_meta_spites_x_offset_07:
-    .byte $00, $00, $00, $00
+    .byte $00, $00, $00, $89
   player_meta_spites_y_offset_07:
-    .byte $18, $00, $00, $00
+    .byte $08, $00, $00, $82
 
 
 
