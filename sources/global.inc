@@ -33,36 +33,7 @@
 .global init_scroll, check_update_bg_scroll, update_scroll, apply_scroll_x
 .globalzp level_index, level_flags, scroll_x
 
-;entity addresses======================================================
-    entity_addr = $300
-    entity_type = $0300
-    entity_state = $0310
-    entity_id = $0320
-    entity_anim_id = $0330
-    entity_anim_frame_id = $0340
-    entity_anim_delay_cnt = $0350
-    entity_pos_x = $0360
-    entity_pos_y = $0370
-    entity_velocity_x = $0380
-    entity_velocity_y = $0390
-    entity_pos_x_lo = $03a0
-    entity_pos_y_lo = $03b0
-    entity_addr_end = $03bf
 
-    curr_entity_index = $00
-
-    tempX = $0c
-    tempY = $0d
-    tempZ = $0e
-    tempW = $0f
-
-;player collision=====================================================
-    .scope TileType
-        WALKABLE    = $00
-        SOLID       = $01
-    .endscope
-
-;level addresses======================================================
 
 
 

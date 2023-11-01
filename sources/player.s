@@ -138,11 +138,16 @@ bottom_floor_limit = $de
     ldx #0
     jsr update_frame_delay_cnt
 
-  @remove_player_velocity:
-    lda #0
-    sta entity_velocity_x
-    sta entity_velocity_y
+    jsr remove_player_velocity
+
   @no_guard_input:
+  rts
+.endproc
+
+.proc remove_player_velocity
+  lda #0
+  sta entity_velocity_x
+  sta entity_velocity_y
   rts
 .endproc
 
@@ -166,6 +171,8 @@ bottom_floor_limit = $de
 
     ldx #0
     jsr update_frame_delay_cnt
+
+    jsr remove_player_velocity
 
   @no_select_key:
   rts
@@ -579,10 +586,8 @@ bottom_floor_limit = $de
   lda entity_state
   and #$0f
   cmp #EntityState::Attacking
-  beq @end_player_action_anim
-  cmp #EntityState::Guarding
-  beq @end_player_action_anim
-  jmp @check_player_guard_anim_end  
+  bcc @check_player_guard_anim_end
+  ;jmp @check_player_guard_anim_end  
   @end_player_action_anim:
     lda entity_state
     and #$f0
@@ -592,7 +597,6 @@ bottom_floor_limit = $de
     ldx player_index
     lda player_anim_idle, x
     sta entity_anim_id
-
   @check_player_guard_anim_end:
   rts
 .endproc
@@ -812,52 +816,52 @@ player_spawn_y:
       ;$04 - p_0 hurt
 
  player_anim_frame_count:
-    .byte $01, $04, $03, $06,   $04
+    .byte $01, $04, $03, $06,   $05
 
   player_anim_meta_sprites_f0:
-    .byte $00, $02, $04, $05,   $04
+    .byte $00, $02, $04, $05,   $08
   player_anim_delay_count_f0:
-    .byte $00, $0a, $07, $0c,   $09
+    .byte $00, $0a, $07, $0c,   $05
   player_anim_sprite_count_f0:
-    .byte $08, $07, $08, $06,   $04
+    .byte $08, $07, $08, $06,   $06
   player_anim_palette_f0:
-    .byte $00, $00, $00, $00,   $01
+    .byte $00, $00, $00, $00,   $00
 
   player_anim_meta_sprites_f1:
-    .byte $00, $01, $05, $07,   $04
+    .byte $00, $01, $05, $07,   $08
   player_anim_delay_count_f1:
-    .byte $ff, $0a, $02, $04,   $04
+    .byte $ff, $0a, $02, $04,   $05
   player_anim_sprite_count_f1:
-    .byte $06, $06, $07, $06,   $04
+    .byte $06, $06, $07, $06,   $06
   player_anim_palette_f1:
-    .byte $00, $00, $00, $00,   $00
+    .byte $00, $00, $00, $00,   $01
 
   player_anim_meta_sprites_f2:
-    .byte $00, $02, $06, $07,   $04
+    .byte $00, $02, $06, $07,   $08
   player_anim_delay_count_f2:
-    .byte $ff, $0a, $13, $04,   $04
+    .byte $ff, $0a, $13, $04,   $05
   player_anim_sprite_count_f2:
-    .byte $06, $07, $08, $06,   $04
+    .byte $06, $07, $08, $06,   $06
   player_anim_palette_f2:
-    .byte $00, $00, $00, $01,   $01
+    .byte $00, $00, $00, $01,   $00
 
   player_anim_meta_sprites_f3:
-    .byte $00, $03, $00, $07,   $04
+    .byte $00, $03, $00, $07,   $08
   player_anim_delay_count_f3:
-    .byte $ff, $0a, $00, $04,   $04
+    .byte $ff, $0a, $00, $04,   $05
   player_anim_sprite_count_f3:
-    .byte $06, $08, $00, $06,   $04
+    .byte $06, $08, $00, $06,   $06
   player_anim_palette_f3:
-    .byte $00, $00, $00, $00,   $00
+    .byte $00, $00, $00, $00,   $01
     
   player_anim_meta_sprites_f4:
-    .byte $00, $00, $00, $07,   $04
+    .byte $00, $00, $00, $07,   $08
   player_anim_delay_count_f4:
-    .byte $ff, $ff, $00, $04,   $04
+    .byte $ff, $ff, $00, $04,   $05
   player_anim_sprite_count_f4:
-    .byte $06, $08, $00, $06,   $04
+    .byte $06, $08, $00, $06,   $06
   player_anim_palette_f4:
-    .byte $00, $00, $00, $01,   $04
+    .byte $00, $00, $00, $01,   $00
 
   player_anim_meta_sprites_f5:
     .byte $00, $00, $00, $07,   $04
@@ -927,48 +931,48 @@ player_metasprite_y_offset_addr_hi:
 
 player_meta_sprites_index:
   player_meta_sprites_00:
-    .byte $00, $00, $02, $00,   $04, $04, $00,   $00,   $00  
+    .byte $00, $00, $02, $00,   $04, $04, $00,   $00,   $0c  
   player_meta_spites_x_offset_00:
-    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $84
   player_meta_spites_y_offset_00:
     .byte $00, $00, $00, $00,   $00, $00, $00,   $00,   $00
 
   player_meta_sprites_01:
-    .byte $01, $01, $03, $01,   $05, $05, $01,   $01,   $00  
+    .byte $01, $01, $03, $01,   $05, $05, $01,   $01,   $0d  
   player_meta_spites_x_offset_01:
-    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $04
   player_meta_spites_y_offset_01:
     .byte $00, $00, $00, $00,   $00, $00, $00,   $00,   $00
 
   player_meta_sprites_02:
-    .byte $10, $14, $12, $10,   $16, $14, $07,   $18,   $00 
+    .byte $10, $14, $12, $10,   $16, $14, $07,   $18,   $1c 
   player_meta_spites_x_offset_02:
-    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $84
   player_meta_spites_y_offset_02:
-    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $00
+    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $08
 
   player_meta_sprites_03:
-    .byte $11, $15, $13, $11,   $17, $15, $08,   $19,   $00  
+    .byte $11, $15, $13, $11,   $17, $15, $08,   $19,   $1d  
   player_meta_spites_x_offset_03:
-    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $04
   player_meta_spites_y_offset_03:
-    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $00
+    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $08
 
 
 
   player_meta_sprites_04:
-    .byte $20, $24, $22, $20,   $26, $26, $26,   $28,   $00  
+    .byte $20, $24, $22, $20,   $26, $26, $26,   $28,   $2c  
   player_meta_spites_x_offset_04:
-    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $84
   player_meta_spites_y_offset_04:
-    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $00
+    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $10
 
   player_meta_sprites_05:
-    .byte $21, $25, $23, $21,   $27, $27, $27,   $29,   $00  
+    .byte $21, $25, $23, $21,   $27, $27, $27,   $29,   $2d  
   player_meta_spites_x_offset_05:
-    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $04
   player_meta_spites_y_offset_05:
-    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $00
+    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $10
 
   ;sw 1                               
   player_meta_sprites_06:
