@@ -1,11 +1,31 @@
 .ifndef ENTITY_INC
 .define ENTITY_INC
-;entity state
-;low nib = EntityState
-;hi nib flags
-;x---   there was a state change
-;-x--   facing left of right   
-;--x-   there was sprite update
+
+;entity addresses======================================================
+    entity_addr = $300
+    entity_type = $0300
+    entity_state = $0310
+    entity_id = $0320
+    entity_anim_id = $0330
+    entity_anim_frame_id = $0340
+    entity_anim_delay_cnt = $0350
+    entity_pos_x = $0360
+    entity_pos_y = $0370
+    entity_velocity_x = $0380
+    entity_velocity_y = $0390
+    entity_pos_x_lo = $03a0
+    entity_pos_y_lo = $03b0
+    entity_invu_time = $03c0
+    entity_addr_end = $03cf
+    
+
+    curr_entity_index = $00
+
+    tempX = $0c
+    tempY = $0d
+    tempZ = $0e
+    tempW = $0f
+
 
 .struct Entity
     type                    .byte
@@ -36,11 +56,17 @@
     moving_still        = $03
 .endscope
 
+;entity state
+;low nib = EntityState
+;hi nib flags
+;x---   there was a state change
+;-x--   facing left of right   
+;--x-   there was sprite update
 .scope EntityState
     Idle = $00
     Moving = $01
     Attacking = $02
-    Defending = $03
+    Guarding = $03
     Hurt = $04
     Dying = $06
     Dead = $07

@@ -37,7 +37,7 @@
 ; NTSC values, and PAL accelerations should be 1.44 times NTSC.
 ; WALK_SPD = 14  ; speed limit in 1/256 px/frame
 
-left_screen_limit = $02
+left_screen_limit = $08
 right_screen_limit = $fd
 top_floor_limit = $8a
 bottom_floor_limit = $de
@@ -52,6 +52,9 @@ bottom_floor_limit = $de
   sta entity_velocity_y
   sta entity_pos_x_lo
   sta entity_pos_y_lo
+
+  lda #$10
+  sta entity_invu_time
 
   lda #EntityType::player_type
   ora #EntityBehaviourType::moving_animated
@@ -80,20 +83,94 @@ bottom_floor_limit = $de
 .endproc
 
 .proc update_player
+  jsr check_player_hurt
+  
+  lda entity_state
+  and #$0f
+  cmp #EntityState::Attacking
+  bcs @end_check_player_input
+
+  jsr check_player_action_input
+
+  lda entity_state
+  and #$0f
+  cmp #EntityState::Attacking
+  bcs @end_check_player_input
+
+  @check_movement_input:
   jsr check_player_move_input
+
+  @end_check_player_input:
   rts
 .endproc
 
-.proc check_player_action
+.proc check_player_action_input
+  lda cur_keys
+  and #KEY_A
+  beq @no_attack_input  
+  @attack_input:
+    lda entity_state
+    and #$f0
+    ora #EntityState::State_Changed | EntityState::Attacking
+    sta entity_state
+
+    ldx player_index
+    lda player_anim_attack, x
+
+    jmp @store_action_input
+
+  @no_attack_input:
+  lda cur_keys
+  and #KEY_B
+  beq @no_guard_input  
+  @guard_input:
+    lda entity_state
+    and #$f0
+    ora #EntityState::State_Changed | EntityState::Guarding
+    sta entity_state
+
+    ldx player_index
+    lda player_anim_guard, x
+
+  @store_action_input:
+    sta entity_anim_id
+
+    ldx #0
+    jsr update_frame_delay_cnt
+
+  @remove_player_velocity:
+    lda #0
+    sta entity_velocity_x
+    sta entity_velocity_y
+  @no_guard_input:
   rts
 .endproc
 
-.proc update_player_entity
-  jsr update_player_velocity
-  jsr update_player_animation
-  jsr update_player_oam_buffer
+.proc check_player_hurt
+  lda entity_invu_time
+  bne @no_select_key
+
+  lda cur_keys
+  and #KEY_SELECT
+  beq @no_select_key  
+  @select_input:
+    lda entity_state
+    and #$f0
+    ora #EntityState::State_Changed | EntityState::Hurt
+    sta entity_state
+
+    ldx player_index
+    lda player_anim_hurt, x
+
+    sta entity_anim_id
+
+    ldx #0
+    jsr update_frame_delay_cnt
+
+  @no_select_key:
   rts
 .endproc
+
 
 ; Moves the player character in response to controller 1.
 ; facing 0=left, 1=right
@@ -107,7 +184,7 @@ bottom_floor_limit = $de
     sta entity_velocity_x
 
     lda entity_state
-    ora #%01000000
+    ora #EntityState::Facing_Right
     sta entity_state
 
     jmp @doneInputX
@@ -122,7 +199,7 @@ bottom_floor_limit = $de
     sta entity_velocity_x
 
     lda entity_state
-    and #%10111111
+    and #<~EntityState::Facing_Right
     sta entity_state
 
     jmp @doneInputX                    
@@ -166,8 +243,9 @@ bottom_floor_limit = $de
 
   @check_state_change_still:
     lda entity_state
-    and #EntityState::Idle
-    bne @end_move_state_change_check
+    and #$0f
+    cmp #EntityState::Idle
+    beq @end_move_state_change_check
       lda entity_state
       and #$f0
       ora #EntityState::State_Changed | EntityState::Idle
@@ -211,6 +289,26 @@ bottom_floor_limit = $de
   stx entity_anim_frame_id
   rts
 .endproc
+
+
+.proc update_player_entity
+  jsr update_player_velocity
+  jsr update_player_invu_state
+  jsr update_player_animation
+  jsr update_player_oam_buffer
+  rts
+.endproc
+
+
+.proc update_player_invu_state
+  ldy entity_invu_time
+  beq @invu_state_check_end
+  dey
+  sta entity_invu_time
+  @invu_state_check_end:
+  rts
+.endproc
+
 
 ;buffers new pos x and y based on velocity values, then apply velocity
 .proc update_player_velocity
@@ -430,7 +528,7 @@ bottom_floor_limit = $de
       lda entity_state
       eor #EntityState::State_Changed
       sta entity_state
-      jmp @update_anim_frame
+      jmp @state_change_anim
     :
     lda entity_anim_delay_cnt
     beq @update_anim_frame
@@ -439,6 +537,15 @@ bottom_floor_limit = $de
     @decrement_delay_count:
       dec entity_anim_delay_cnt
       jmp @end_anim_check
+
+    @state_change_anim:
+      ldx entity_anim_id
+      lda player_anim_frame_count, x
+      cmp #1
+      beq @end_anim_check
+      lda #0
+      sta entity_anim_frame_id
+      jmp @store_frame_delay_count
 
     @update_anim_frame:
       ;check if anim is only 1 frame, if yes exit anim update
@@ -455,6 +562,8 @@ bottom_floor_limit = $de
         jmp @store_frame_delay_count
 
       @is_over_frame_count:
+        ;animation over
+        jsr check_player_anim_end
         lda #0
         sta entity_anim_frame_id
 
@@ -464,6 +573,28 @@ bottom_floor_limit = $de
         
   @end_anim_check:
     rts
+.endproc
+
+.proc check_player_anim_end
+  lda entity_state
+  and #$0f
+  cmp #EntityState::Attacking
+  beq @end_player_action_anim
+  cmp #EntityState::Guarding
+  beq @end_player_action_anim
+  jmp @check_player_guard_anim_end  
+  @end_player_action_anim:
+    lda entity_state
+    and #$f0
+    ora #EntityState::State_Changed | EntityState::Idle
+    sta entity_state
+
+    ldx player_index
+    lda player_anim_idle, x
+    sta entity_anim_id
+
+  @check_player_guard_anim_end:
+  rts
 .endproc
 
 .proc update_player_oam_buffer
@@ -631,11 +762,19 @@ player_spawn_y:
   player_anim_walk:
     .byte $01
 
+  player_anim_attack:
+    .byte $02
+
+  player_anim_guard:
+    .byte $03
+
+  player_anim_hurt:
+    .byte $04
+
   player_move_speed:
     .byte $7f                   ;entity move speed
 
-  player_anim_frame_count:
-    .byte $01, $04
+ 
 
   player_anim_frame_palette_addr_lo:
     .byte <player_anim_palette_f0, <player_anim_palette_f1, <player_anim_palette_f2, <player_anim_palette_f3 
@@ -665,88 +804,87 @@ player_spawn_y:
     .byte >player_anim_sprite_count_f0, >player_anim_sprite_count_f1, >player_anim_sprite_count_f2, >player_anim_sprite_count_f3 
     .byte >player_anim_sprite_count_f4, >player_anim_sprite_count_f5, >player_anim_sprite_count_f6, >player_anim_sprite_count_f7  
 
+  ;anim frames data
+      ;$00 - p_0 idle
+      ;$01 - p_0 walk
+      ;$02 - p_0 attack
+      ;$03 - p_0 guard
+      ;$04 - p_0 hurt
 
-  player_anim_palette_f0:
-    .byte $00, $00
-  player_anim_delay_count_f0:
-    .byte $00, $0a
+ player_anim_frame_count:
+    .byte $01, $04, $03, $06,   $04
+
   player_anim_meta_sprites_f0:
-    .byte $00, $01
+    .byte $00, $02, $04, $05,   $04
+  player_anim_delay_count_f0:
+    .byte $00, $0a, $07, $0c,   $09
   player_anim_sprite_count_f0:
-    .byte $06, $06
+    .byte $08, $07, $08, $06,   $04
+  player_anim_palette_f0:
+    .byte $00, $00, $00, $00,   $01
 
-  player_anim_palette_f1:
-    .byte $00, $00
-  player_anim_delay_count_f1:
-    .byte $ff, $0a
   player_anim_meta_sprites_f1:
-    .byte $00, $02
+    .byte $00, $01, $05, $07,   $04
+  player_anim_delay_count_f1:
+    .byte $ff, $0a, $02, $04,   $04
   player_anim_sprite_count_f1:
-    .byte $06, $07
+    .byte $06, $06, $07, $06,   $04
+  player_anim_palette_f1:
+    .byte $00, $00, $00, $00,   $00
 
-  player_anim_palette_f2:
-    .byte $00, $00
-  player_anim_delay_count_f2:
-    .byte $ff, $0a
   player_anim_meta_sprites_f2:
-    .byte $00, $03
+    .byte $00, $02, $06, $07,   $04
+  player_anim_delay_count_f2:
+    .byte $ff, $0a, $13, $04,   $04
   player_anim_sprite_count_f2:
-    .byte $06, $08
+    .byte $06, $07, $08, $06,   $04
+  player_anim_palette_f2:
+    .byte $00, $00, $00, $01,   $01
 
-  player_anim_palette_f3:
-    .byte $00, $00
-  player_anim_delay_count_f3:
-    .byte $ff, $0a
   player_anim_meta_sprites_f3:
-    .byte $00, $02
+    .byte $00, $03, $00, $07,   $04
+  player_anim_delay_count_f3:
+    .byte $ff, $0a, $00, $04,   $04
   player_anim_sprite_count_f3:
-    .byte $06, $08
+    .byte $06, $08, $00, $06,   $04
+  player_anim_palette_f3:
+    .byte $00, $00, $00, $00,   $00
     
-  player_anim_palette_f4:
-    .byte $00, $00
-  player_anim_delay_count_f4:
-    .byte $ff, $ff
   player_anim_meta_sprites_f4:
-    .byte $00, $00
+    .byte $00, $00, $00, $07,   $04
+  player_anim_delay_count_f4:
+    .byte $ff, $ff, $00, $04,   $04
   player_anim_sprite_count_f4:
-    .byte $06, $08
+    .byte $06, $08, $00, $06,   $04
+  player_anim_palette_f4:
+    .byte $00, $00, $00, $01,   $04
 
-  player_anim_palette_f5:
-    .byte $00, $00
-  player_anim_delay_count_f5:
-    .byte $ff, $ff
   player_anim_meta_sprites_f5:
-    .byte $00, $00
+    .byte $00, $00, $00, $07,   $04
+  player_anim_delay_count_f5:
+    .byte $ff, $ff, $00, $13,   $04
   player_anim_sprite_count_f5:
-    .byte $06, $08
+    .byte $06, $08, $00, $06,   $04
+  player_anim_palette_f5:
+    .byte $00, $00, $00, $00,   $04
 
-  player_anim_palette_f6:
-    .byte $00, $00
-  player_anim_delay_count_f6:
-    .byte $ff, $ff
   player_anim_meta_sprites_f6:
-    .byte $00, $00
+    .byte $00, $00, $00, $04,   $04
+  player_anim_delay_count_f6:
+    .byte $ff, $ff, $00, $04,   $04
   player_anim_sprite_count_f6:
-    .byte $06, $08
+    .byte $06, $08, $00, $04,   $04
+  player_anim_palette_f6:
+    .byte $00, $00, $00, $04,   $04
 
-  player_anim_palette_f7:
-    .byte $00, $00
-  player_anim_delay_count_f7:
-    .byte $ff, $ff
   player_anim_meta_sprites_f7:
-    .byte $00, $00
+    .byte $00, $00, $00, $04,   $04
+  player_anim_delay_count_f7:
+    .byte $ff, $ff, $00, $04,   $04
   player_anim_sprite_count_f7:
-    .byte $06, $08
-
-
-; player_metasprite_x_offset_addr_lo:
-;   .byte <player_sprites_x_offset_00, <player_sprites_x_offset_01, <player_sprites_x_offset_02, <player_sprites_x_offset_03, <player_sprites_x_offset_04, <player_sprites_x_offset_05, <player_sprites_x_offset_06, <player_sprites_x_offset_07
-; player_metasprite_x_offset_addr_hi:
-;   .byte >player_sprites_x_offset_00, >player_sprites_x_offset_01, >player_sprites_x_offset_02, >player_sprites_x_offset_03, >player_sprites_x_offset_04, >player_sprites_x_offset_05, >player_sprites_x_offset_06, >player_sprites_x_offset_07
-; player_metasprite_y_offset_addr_lo:
-;   .byte <player_sprites_y_offset_00, <player_sprites_y_offset_01, <player_sprites_y_offset_02, <player_sprites_y_offset_03, <player_sprites_y_offset_04, <player_sprites_y_offset_05, <player_sprites_y_offset_06, <player_sprites_y_offset_07
-; player_metasprite_y_offset_addr_hi:
-;   .byte >player_sprites_y_offset_00, >player_sprites_y_offset_01, >player_sprites_y_offset_02, >player_sprites_y_offset_03, >player_sprites_y_offset_04, >player_sprites_y_offset_05, >player_sprites_y_offset_06, >player_sprites_y_offset_07
+    .byte $06, $08, $00, $04,   $04
+  player_anim_palette_f7:
+    .byte $00, $00, $00, $04,   $04
 
 player_metasprite_index_addr_lo:
   .byte <player_meta_sprites_00, <player_meta_sprites_01, <player_meta_sprites_02, <player_meta_sprites_03
@@ -776,69 +914,77 @@ player_metasprite_y_offset_addr_hi:
   .byte >player_meta_spites_y_offset_08, >player_meta_spites_y_offset_09
 
 
-; player_meta_sprites_offset:
-  ;   
+; player_meta_sprites_data:
+  ;$00 - p_0 idle f0
+  ;$01 - p_0 walk f1 
+  ;$02 - p_0 walk f0 
+  ;$03 - p_0 walk f2 
+  ;$04 - p_0 attack f0 
+  ;$05 - p_0 attack f1  /  p_0 guard f0
+  ;$06 - p_0 attack f2 
+  ;$07 - p_0 guard f1 
+  ;$08 - p_0 hurt f1 
 
-
-          ;id  w00  w01  w02
 player_meta_sprites_index:
   player_meta_sprites_00:
-    .byte $00, $00, $02, $00
+    .byte $00, $00, $02, $00,   $04, $04, $00,   $00,   $00  
   player_meta_spites_x_offset_00:
-    .byte $84, $84, $84, $84
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
   player_meta_spites_y_offset_00:
-    .byte $00, $00, $00, $00
+    .byte $00, $00, $00, $00,   $00, $00, $00,   $00,   $00
 
   player_meta_sprites_01:
-    .byte $01, $01, $03, $01
+    .byte $01, $01, $03, $01,   $05, $05, $01,   $01,   $00  
   player_meta_spites_x_offset_01:
-    .byte $04, $04, $04, $04
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
   player_meta_spites_y_offset_01:
-    .byte $00, $00, $00, $00
+    .byte $00, $00, $00, $00,   $00, $00, $00,   $00,   $00
 
   player_meta_sprites_02:
-    .byte $14, $14, $12, $10
+    .byte $10, $14, $12, $10,   $16, $14, $07,   $18,   $00 
   player_meta_spites_x_offset_02:
-    .byte $84, $84, $84, $84
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
   player_meta_spites_y_offset_02:
-    .byte $08, $08, $08, $08
+    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $00
 
   player_meta_sprites_03:
-    .byte $15, $15, $13, $11
+    .byte $11, $15, $13, $11,   $17, $15, $08,   $19,   $00  
   player_meta_spites_x_offset_03:
-    .byte $04, $04, $04, $04
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
   player_meta_spites_y_offset_03:
-    .byte $08, $08, $08, $08
+    .byte $08, $08, $08, $08,   $08, $08, $08,   $08,   $00
 
 
 
   player_meta_sprites_04:
-    .byte $20, $24, $22, $20
+    .byte $20, $24, $22, $20,   $26, $26, $26,   $28,   $00  
   player_meta_spites_x_offset_04:
-    .byte $84, $84, $84, $84
+    .byte $84, $84, $84, $84,   $84, $84, $84,   $84,   $00
   player_meta_spites_y_offset_04:
-    .byte $10, $10, $10, $10
+    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $00
 
   player_meta_sprites_05:
-    .byte $21, $25, $23, $21
+    .byte $21, $25, $23, $21,   $27, $27, $27,   $29,   $00  
   player_meta_spites_x_offset_05:
-    .byte $04, $04, $04, $04
+    .byte $04, $04, $04, $04,   $04, $04, $04,   $04,   $00
   player_meta_spites_y_offset_05:
-    .byte $10, $10, $10, $10
+    .byte $10, $10, $10, $10,   $10, $10, $10,   $10,   $00
 
+  ;sw 1                               
   player_meta_sprites_06:
-    .byte $ff, $ff, $2b, $2a
+    .byte $2a, $ff, $2b, $2a,   $1b, $2b, $0a,   $ff,   $00  
   player_meta_spites_x_offset_06:
-    .byte $00, $00, $87, $89
+    .byte $89, $00, $83, $89,   $0a, $88, $8b,   $ff,   $00    
   player_meta_spites_y_offset_06: 
-    .byte $0b, $0b, $05, $05
-
+    .byte $05, $0b, $05, $05,   $00, $02, $0a,   $ff,   $00
+  
+  ;sw 2                              
   player_meta_sprites_07:
-    .byte $ff, $ff, $ff, $1a
+    .byte $1a, $ff, $ff, $1a,   $0b, $ff, $09,   $ff,   $00  
   player_meta_spites_x_offset_07:
-    .byte $00, $00, $00, $89
+    .byte $89, $00, $00, $89,   $0a, $87, $93,   $ff,   $00   
   player_meta_spites_y_offset_07:
-    .byte $08, $00, $00, $82
+    .byte $83, $00, $00, $82,   $88, $03, $0a,   $ff,   $00
 
 
 

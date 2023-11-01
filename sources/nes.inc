@@ -88,5 +88,11 @@ KEY_RIGHT  = %00000001
     LastColumnLoaded = $40
 .endscope
 
+;player collision=====================================================
+.scope TileType
+    WALKABLE    = $00
+    SOLID       = $01
+.endscope
+
 
 .endif

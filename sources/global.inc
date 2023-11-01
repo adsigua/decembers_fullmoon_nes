@@ -57,8 +57,10 @@
     tempW = $0f
 
 ;player collision=====================================================
-    
-
+    .scope TileType
+        WALKABLE    = $00
+        SOLID       = $01
+    .endscope
 
 ;level addresses======================================================
 

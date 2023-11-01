@@ -35,10 +35,7 @@
 
 .segment "CODE"
 
-.enum TileType
-  WALKABLE = 0
-  SOLID = 1
-.endenum
+
 
 .export draw_bg
 
