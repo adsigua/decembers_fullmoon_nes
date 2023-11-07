@@ -2,7 +2,18 @@
 .include "global.inc"
 .include "entity.inc"
 
-;.segment "ZEROPAGE"
+.segment "ZEROPAGE"
+  entity_count:         .res 1
+  curr_entity_index:    .res 1
+  temp_pos_hi:          .res 1
+  temp_pos_lo:          .res 1
+  curr_x_offset_addr:   .res 2
+  curr_y_offset_addr:   .res 2
+  curr_metasprite_addr: .res 2
+  curr_entity_id:       .res 1
+
+MAX_ENTITY_COUNT = $10
+
 .segment "CODE"
 
 .proc clear_entities
@@ -13,6 +24,7 @@
 
   ldy #<entity_addr_end
   lda #0
+  sta entity_count
   @clear_entity_loop:
     sta (tempX), y
     dey
@@ -23,12 +35,11 @@
 .proc init_entities
   jsr clear_entities
   jsr init_player_entity
+  inc entity_count
   rts
 .endproc
 
-;curr_entity_data = entity data from rom
 .proc init_entity
-
     jmp @end_init
 
   @init_static_animated:
@@ -36,6 +47,48 @@
     jmp @end_init
   @end_init:
     rts
+.endproc
+
+;tempX = posX
+;tempY = posY
+;y = entity_id
+.proc spawn_monster_entity
+  posX = tempX
+  posY = tempY
+
+  ldx entity_count
+  cpx #MAX_ENTITY_COUNT
+  beq @no_spawn
+
+  tya
+  sta entity_id, x
+
+  lda #0
+  sta entity_anim_delay_cnt, x
+  sta entity_velocity_x, x
+  sta entity_velocity_y, x
+  sta entity_pos_x_lo, x
+  sta entity_pos_y_lo, x
+  sta entity_invu_time, x
+
+  lda entity_data_type, y
+  sta entity_type, x
+
+  lda entity_anim_idle, y
+  sta entity_anim_id, x
+
+  lda #EntityState::Idle | EntityState::State_Changed
+  sta entity_state, x
+
+  lda posX
+  sta entity_pos_x, x
+  lda posY
+  sta entity_pos_y, x
+
+  inc entity_count
+
+  @no_spawn:
+  rts
 .endproc
 
 .proc update_entities
@@ -46,262 +99,685 @@
     and #$0f
     beq @no_update
 
-    lda entity_type, x                ;check entity behaviour type
+    lda entity_type, x               
     and #$f0
     cmp #EntityType::player_type
-    ;cmp #$01
     beq @update_player_entity
+    bcs @update_nonplayer_entities
     jmp @no_update
 
     @update_player_entity:
       jsr update_player_entity
       jmp @no_update
+
+    @update_nonplayer_entities:
+      jsr update_nonplayer_entity
       
     @no_update:
-    dey
     inc curr_entity_index
     ldx curr_entity_index
-    cpx #$10
+    cpx entity_count
     bne @update_entity_loop
   rts
 .endproc
 
-.proc apply_entity_velocity
+.proc update_nonplayer_entity
+
+  lda entity_type, x 
+  and #$0f          
+  cmp #EntityBehaviourType::static_animated
+  beq @update_static_animated
+  cmp #EntityBehaviourType::moving_animated
+  beq @update_animated
+  @update_static:
+    jsr update_entity_oam_buffer
+    jsr update_static_pos
+    jmp @end_update_nonplayer_entity
+
+  @update_static_animated:
+    jmp @end_update_nonplayer_entity
+
+  @update_animated:
+    jsr update_entity_animation
+    jsr update_static_pos
+    jsr update_entity_oam_buffer
+
+  @end_update_nonplayer_entity:
+    rts
+.endproc
+
+;x = entity_index
+.proc update_entity_animation
+  curr_entity_state = $02
+
   ldx curr_entity_index
-  lda entity_velocity_x, x
-  beq @check_y_velocity
-  
-  bpl @entity_positive_x_speed
-    ; if velocity is negative, subtract 1 from high byte to sign extend
-    dec entity_pos_x, x
-  @entity_positive_x_speed:
-    clc
-    adc entity_pos_x_lo, x
-    sta entity_pos_x_lo, x
-    lda #0                    ; add high byte
-    adc entity_pos_x, x
-    sta entity_pos_x, x
-    ;jsr bound_position_x
+  lda entity_state, x
+  sta curr_entity_state
 
-  @check_y_velocity:
-  lda entity_velocity_y, x
-  beq @end_velocity_apply
+  ;check if there was state change, if not check if delay cnt is 0
+  bit curr_entity_state
+  bpl :+
+    lda curr_entity_state
+    eor #EntityState::State_Changed
+    sta curr_entity_state
+    sta entity_state, x
+    jmp @state_change_anim
+  :
+  lda entity_anim_delay_cnt, x
+  beq @update_anim_frame
 
-  bpl @entity_positive_y_speed
-    dec entity_pos_y, x
-  @entity_positive_y_speed:
-  clc
-  adc entity_pos_y_lo, x
-  sta entity_pos_y_lo, x
-  lda #0        
-  adc entity_pos_y, x
-  sta entity_pos_y, x
-  ;jsr bound_position_y
+  ;decrement frame
+  @decrement_delay_count:
+    ldy entity_anim_delay_cnt, x
+    dey
+    tya
+    sta entity_anim_delay_cnt, x
+    jmp @end_anim_check
 
-  @end_velocity_apply:
+  @state_change_anim:
+    ldy entity_anim_id, x
+    lda entity_anim_frame_count, y
+    cmp #1
+    beq @end_anim_check
 
+    lda #0
+    sta entity_anim_frame_id, x
+    jmp @store_frame_delay_count
+
+  @update_anim_frame:
+    ;check if anim is only 1 frame, if yes exit anim update
+    ldy entity_anim_id, x
+    lda entity_anim_frame_count, y
+    cmp #1
+    beq @end_anim_check
+
+    @check_next_frame:
+      inc entity_anim_frame_id, x
+      lda entity_anim_frame_id, x
+      cmp entity_anim_frame_count, y
+      bcs @is_over_frame_count
+      jmp @store_frame_delay_count
+
+    @is_over_frame_count:
+      ;animation over
+      jsr check_entity_anim_end
+      ldx curr_entity_index
+      lda #0
+      sta entity_anim_frame_id, x
+
+    @store_frame_delay_count:
+      sta tempZ
+      tay 
+      lda entity_anim_frame_delay_addr_lo, y 
+      sta tempX
+      lda entity_anim_frame_delay_addr_hi, y
+      sta tempX+1
+      jsr update_entity_frame_delay_cnt
+      
+  @end_anim_check:
   rts
 .endproc
 
-;trash =========================================================
-    ;get tiles addr
-  ; ldy #AnimFrameData::frame_sprites_addr
-  ; lda (frame_data_addr), y
-  ; sta curr_sprite_tile_data
-  ; iny
-  ; lda (frame_data_addr), y
-  ; sta curr_sprite_tile_data+1
+;tempX,Y = frame delay addr
+;tempZ = frame id
+;x = entity index
+.proc update_entity_frame_delay_cnt
+  temp_frame_delay_addr_lo = tempX
+  temp_frame_id = tempZ
 
-  ; ;get offsets addrs
-  ; ldy #EntityData::spr_x_offsets
-  ; lda (curr_entity_data), y
-  ; sta offsetX_addr
-  ; iny
-  ; lda (curr_entity_data), y 
-  ; sta offsetX_addr+1
+  ldy entity_anim_id, x
+  lda (temp_frame_delay_addr_lo), y
+  sta entity_anim_delay_cnt, x
+  lda temp_frame_id
+  sta entity_anim_frame_id, x
+  rts
+.endproc
 
-  ; ldy #EntityData::spr_y_offsets
-  ; lda (curr_entity_data), y
-  ; sta offsetY_addr
-  ; iny
-  ; lda (curr_entity_data), y 
-  ; sta offsetY_addr+1
+;x = entity index
+.proc check_entity_anim_end
+  curr_entity_anim_frame_count = $00
+  curr_entity_ypos= $01
+  curr_entity_state = $02
+  entity_meta_sprite_index = $03
+  sprite_count = $04
+  pallete_index = $05
+  tempAddr_lo = tempX
+  tempAddr_hi = tempX+1
+  
+  lda curr_entity_state
+  and #$0f
+  cmp #EntityState::Attacking
+  bcc @check_entity_anim_end
+  ;jmp @check_player_guard_anim_end  
+  @end_player_action_anim:
+    lda entity_state
+    and #$f0
+    ora #EntityState::State_Changed | EntityState::Idle
+    sta entity_state
 
-  ; ;get number of tiles
-  ; ldy #EntityData::tile_count
-  ; lda (curr_entity_data), y
-  ; tax
-  ; ldy #0
-  ; sty sprite_draw_index
+    ldy entity_id, x
+    lda entity_anim_idle, y
+    sta entity_anim_id, x
+  @check_entity_anim_end:
+  rts
+.endproc
 
-  ; @draw_entity_loop:
-  ;   ldy #Entity::screen_pos_y
-  ;   lda (curr_entity_state), y    ;y-pos
-  ;   sta tempX
+;x = entity index
+.proc apply_entity_velocity
+  ldx curr_entity_index
+  lda entity_velocity_x, x
+  beq @check_scroll_delta
 
-  ;   ldy sprite_draw_index
-  ;   lda (offsetY_addr), y         ;sprite y-offset
-  ;   clc                  
-  ;   adc tempX
-  ;   sta oam_buffer
+  @check_x_velocity:
+  lda entity_pos_x, x
+  sta temp_pos_hi
+  lda entity_velocity_x, x
+  bpl @entity_positive_x_speed
+    ; if velocity is negative, subtract 1 from high byte to sign extend
+    dec temp_pos_hi
+  @entity_positive_x_speed:
+    clc
+    adc entity_pos_x_lo
+    sta temp_pos_lo
+    lda #0          
+    adc temp_pos_hi
+    sta temp_pos_hi
 
-  ;   ldy sprite_draw_index
-  ;   lda (curr_sprite_tile_data), y        ;sprite/cell index on chr
-  ;   sta oam_buffer+1
+    lda scroll_x_delta
+    bne @add_scroll_x_offset
+    jsr apply_pos_x
+    jmp @check_y_velocity
 
-  ;   ldy #AnimFrameData::frame_palette
-  ;   lda (frame_data_addr), y
-  ;   sta tempX
+  @check_scroll_delta:
+    lda scroll_x_delta
+    beq @check_y_velocity
 
-  ;   ;ldy #Entity::entity_state
-  ;   ;lda (curr_entity_state), y
-  ;   lda curr_entity_facing
-  ;   and #%01000000
-  ;   ora tempX
-  ;   sta oam_buffer+2             
+  @add_scroll_x_offset:
+    dec temp_pos_hi
+    clc
+    adc scroll_x_delta
+    sta temp_pos_lo
+    lda #0          
+    adc temp_pos_hi
+    sta temp_pos_hi
+    jsr apply_pos_x
 
-  ;   ldy sprite_draw_index
-  ;   lda (offsetX_addr), y
-  ;   sta tempX
-  ;   ldy #Entity::screen_pos_x
-  ;   lda (curr_entity_state), y    ;x-pos
+  @check_y_velocity:
+  lda entity_pos_y
+  sta temp_pos_hi
+
+  lda entity_velocity_y
+  beq @end_velocity_update
+
+  bpl @entity_positive_y_speed
+    dec temp_pos_hi
+  @entity_positive_y_speed:
+    clc
+    adc entity_pos_y_lo
+    sta temp_pos_lo
+    lda #0        
+    adc temp_pos_hi
+    sta temp_pos_hi
+
+    jsr apply_pos_y
+  @end_velocity_update:
+  rts
+.endproc
+
+;x = entity index
+.proc update_static_pos
+  ldx curr_entity_index
+  lda scroll_x_delta
+  beq @end_update_static_pos
+    lda entity_pos_x, x
+    sec
+    sbc scroll_x_delta
+    sta entity_pos_x, x
+  @end_update_static_pos:
+  rts
+.endproc
+
+;x = entity id
+.proc apply_pos_x
+  lda temp_pos_hi
+  sta entity_pos_x, x
+  lda temp_pos_lo
+  sta entity_pos_x_lo, x
+  rts
+.endproc
+
+;x = entity id
+.proc apply_pos_y
+  lda temp_pos_hi
+  sta entity_pos_y, x
+  lda temp_pos_lo
+  sta entity_pos_y_lo, x
+  rts
+.endproc
+
+;x = entity id
+.proc remove_entity_velocity
+  lda #0
+  sta entity_velocity_x, x
+  sta entity_velocity_y, x
+  rts
+.endproc
+
+.proc update_entity_oam_buffer
+  curr_entity_xpos = $00
+  curr_entity_ypos= $01
+  curr_entity_state = $02
+  entity_meta_sprite_index = $03
+  sprite_count = $04
+  pallete_index = $05
+  curr_frame_id = $06
+  curr_entity_id = $07
+  tempAddr_lo = tempX
+  tempAddr_hi = tempX+1
+
+  ldx curr_entity_index
+  lda entity_pos_x, x
+  sta curr_entity_xpos
+  lda entity_pos_y, x
+  sta curr_entity_ypos
+  lda entity_state, x
+  sta curr_entity_state
+
+  lda entity_anim_frame_id, x
+  sta curr_frame_id
+  lda entity_anim_id, x
+  tay
+  ldx curr_frame_id
+
+  lda entity_anim_frame_palette_addr_lo, X
+  sta tempAddr_lo
+  lda entity_anim_frame_palette_addr_hi, X
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y
+  sta pallete_index
+
+  lda entity_anim_frame_metasprite_addr_lo, x
+  sta tempAddr_lo
+  lda entity_anim_frame_metasprite_addr_hi, x
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y
+  sta entity_meta_sprite_index
+
+  lda entity_anim_frame_sprite_count_addr_lo, x
+  sta tempAddr_lo
+  lda entity_anim_frame_sprite_count_addr_hi, x
+  sta tempAddr_hi
+
+  lda (tempAddr_lo), y
+  sta sprite_count
+
+  ;sprite number
+  ldx #0
+
+  @draw_entity_loop:
+    lda entity_metasprite_y_offset_addr_lo, x
+    sta curr_y_offset_addr
+    lda entity_metasprite_y_offset_addr_hi, x
+    sta curr_y_offset_addr+1
     
-  ;   bit curr_entity_facing
-  ;   bvs @is_flipped
-  ;   clc
-  ;   adc tempX
-  ;   sta oam_buffer+3
-  ;   jmp @place_buffer_to_oam
-  ; @is_flipped:
-  ;   sec
-  ;   sbc tempX   
-  ;   clc
-  ;   adc #$08
-  ;   sta oam_buffer+3
+    lda entity_metasprite_index_addr_lo, x
+    sta curr_metasprite_addr
+    lda entity_metasprite_index_addr_hi, x
+    sta curr_metasprite_addr+1
 
-  ; @place_buffer_to_oam:
-  ;   jsr update_oam
-  ;   inc sprite_draw_index
-  ;   dex
-  ;   bne @draw_entity_loop
-  ;entities_list_hi = $0300
-  ;entities_list_lo = $0310
-  ;entities_list = $0300     ;entities data memory from 0620 to 06ff
-  ; entity_addr = $300
-  ; entity_type = $0300
-  ; entity_state = $0310
-  ; entity_id = $0320
-  ; entity_anim_id = $0330
-  ; entity_anim_delay_cnt = $0340
-  ; entity_pos_x = $0350
-  ; entity_pos_y = $0360
-  ; entity_velocity_x = $0370
-  ; entity_velocity_y = $0380
-  ; entity_pos_x_lo = $0390
-  ; entity_pos_y_lo = $03a0
+    lda entity_metasprite_x_offset_addr_lo, x
+    sta curr_x_offset_addr
+    lda entity_metasprite_x_offset_addr_hi, x
+    sta curr_x_offset_addr+1
 
-  ; entity_addr_end = $03af
+    jsr draw_entity_sprite
+  @place_buffer_to_oam:
+    jsr update_oam_buffer
+    inx
+    cpx sprite_count
+    bne @draw_entity_loop
 
-  ; curr_entity_index = $00
+  @end_entity_oam_buffer:
+    rts
+.endproc
 
-  ; curr_entity_type = $01
-  ; curr_entity_state = $02       
-  ; curr_entity_id = $01
-  ; curr_entity_anim_num = $03
-  ; curr_entity_anim_delay_cnt = $04
-  ; curr_entity_pos_x = $05
-  ; curr_entity_pos_y = $06
-  ; curr_entity_velocity_x = $07
-  ; curr_entity_velocity_y = $08
-  ; curr_entity_pos_x_lo = $09
-  ; curr_entity_pos_y_lo = $0a
+;x = sprite in
+.proc draw_entity_sprite
+  curr_entity_xpos = $00
+  curr_entity_ypos= $01
+  curr_entity_state = $02
+  entity_meta_sprite_index = $03
+  sprite_count = $04
+  pallete_index = $05
 
-  ; curr_entity_data:   .res 2          ;ram address for rom entity data
-  ; curr_entity_anim_data:   .res 2
-  ; curr_sprite_tile_data:   .res 2
-  ; entity_pos:   .res 2 
-  ; sprite_draw_index: .res 1
+  oamAttrbTemp = tempZ
+  xOffsetTemp = tempZ
 
-  ; init_player_xpos = $78
-  ; init_player_ypos = $BE
+  ldy entity_meta_sprite_index
 
-  ; entityState = $00
-  ; animIndex = $01
-  ; frame_count = $02
-  ; frame_num = $03
-  ; delay_count = $04
-  ; frame_data_addr = $05 ;06
-  ; sprite_mem_addr = $07 ;08
-  ; offsetX_addr = $09 ;0a
-  ; offsetY_addr = $0b ;0c
-  ;load type from entity_data
-  ; ldy #0
-  ; lda (curr_entity_data), y
-  ; cmp #0           ;check if non-entity
-  ; beq @end_init
-  ; iny
+  lda (curr_x_offset_addr), y 
+  bmi @negative_x_offset    
+  @positive_x_offset:
+    sta xOffsetTemp 
+    lda curr_entity_xpos
+    bit curr_entity_state
+    bvs @is_plus_flipped
+    @not_plus_flipped:
+      clc
+      adc xOffsetTemp
+      bcs @skip_sprite
+      jmp @place_x_offset_to_buffer
+    @is_plus_flipped:
+      sec
+      sbc xOffsetTemp   
+      bcc @skip_sprite
+      sec
+      sbc #$08
+      jmp @place_x_offset_to_buffer
+  @negative_x_offset:
+    and #$7f
+    sta xOffsetTemp 
+    lda curr_entity_xpos
+    bit curr_entity_state
+    bvs @is_neg_flipped
+    @not_neg_flipped:
+      sec
+      sbc xOffsetTemp
+      bcc @skip_sprite
+      jmp @place_x_offset_to_buffer
+    @is_neg_flipped:
+      clc
+      adc xOffsetTemp   
+      bcs @skip_sprite
+      sec
+      sbc #$08
+      jmp @place_x_offset_to_buffer
+  @skip_sprite:
+    jmp @end_oam_buffer
+  @place_x_offset_to_buffer:
+    sta oam_buffer+3
 
-  ; lda (curr_entity_data), y
-  ; cmp #EntityBehaviourType::moving_animated
-  ; beq @init_moving_animated
-  ; cmp #EntityBehaviourType::static_animated
-  ; beq @init_static_animated
+  lda (curr_y_offset_addr), y    
+  bmi @negative_y_offset
+  @positive_y_offset:
+    clc                  
+    adc curr_entity_ypos
+    jmp @store_y_offset_buffer
+  @negative_y_offset:
+    and #$7f
+    sta tempZ
+    lda curr_entity_ypos
+    sec                  
+    sbc tempZ
+  @store_y_offset_buffer:
+  sta oam_buffer
 
-  ; @init_static:
-  ;   jmp @end_init
+  lda (curr_metasprite_addr), y        
+  sta oam_buffer+1
 
-  ; @init_moving_animated:
+  ;flags (palette, flipping and bg priority)
+  lda pallete_index
+  sta oamAttrbTemp
+  lda curr_entity_state
+  and #SpriteAttrib::FlipX
+  ora oamAttrbTemp
+  sta oam_buffer+2             
+
+  @end_oam_buffer:
+  rts
+.endproc
+
+
+.segment "RODATA"
+
+;entity ids
+  ;$00 - rock
+  ;$01 - mini angel
+
+entity_data:
+  entity_data_type:
+    .byte $53, $21
+  
+  entity_char_height:
+    .byte $18, $08
+
+  entity_char_width:
+    .byte $10, $08
+
+  entity_anim_idle:
+    .byte $00, $01
+
+  entity_anim_walk:
+    .byte $00, $01
+
+  entity_anim_attack:
+    .byte $00, $01
+
+  entity_anim_guard:
+    .byte $00, $01
+
+  entity_anim_hurt:
+    .byte $00, $01
+
+  entity_move_speed:
+    .byte $7f, $7f                   
+
+  entity_anim_frame_palette_addr_lo:
+    .byte <entity_anim_palette_f0, <entity_anim_palette_f1, <entity_anim_palette_f2, <entity_anim_palette_f3 
+    .byte <entity_anim_palette_f4, <entity_anim_palette_f5, <entity_anim_palette_f6, <entity_anim_palette_f7 
+  entity_anim_frame_palette_addr_hi:
+    .byte >entity_anim_palette_f0, >entity_anim_palette_f1, >entity_anim_palette_f2, >entity_anim_palette_f3
+    .byte >entity_anim_palette_f4, >entity_anim_palette_f5, >entity_anim_palette_f6, >entity_anim_palette_f7 
+  
+  entity_anim_frame_delay_addr_lo:
+    .byte <entity_anim_delay_count_f0, <entity_anim_delay_count_f1, <entity_anim_delay_count_f2, <entity_anim_delay_count_f3
+    .byte <entity_anim_delay_count_f4, <entity_anim_delay_count_f5, <entity_anim_delay_count_f6, <entity_anim_delay_count_f7
+  entity_anim_frame_delay_addr_hi:
+    .byte >entity_anim_delay_count_f0, >entity_anim_delay_count_f1, >entity_anim_delay_count_f2, >entity_anim_delay_count_f3
+    .byte >entity_anim_delay_count_f4, >entity_anim_delay_count_f5, >entity_anim_delay_count_f6, >entity_anim_delay_count_f7
+ 
+  entity_anim_frame_metasprite_addr_lo:
+    .byte <entity_anim_meta_sprites_f0, <entity_anim_meta_sprites_f1, <entity_anim_meta_sprites_f2, <entity_anim_meta_sprites_f3 
+    .byte <entity_anim_meta_sprites_f4, <entity_anim_meta_sprites_f5, <entity_anim_meta_sprites_f2, <entity_anim_meta_sprites_f3 
+  entity_anim_frame_metasprite_addr_hi:
+    .byte >entity_anim_meta_sprites_f0, >entity_anim_meta_sprites_f1, >entity_anim_meta_sprites_f2, >entity_anim_meta_sprites_f3 
+    .byte >entity_anim_meta_sprites_f4, >entity_anim_meta_sprites_f5, >entity_anim_meta_sprites_f6, >entity_anim_meta_sprites_f7  
+
+  entity_anim_frame_sprite_count_addr_lo:
+    .byte <entity_anim_sprite_count_f0, <entity_anim_sprite_count_f1, <entity_anim_sprite_count_f2, <entity_anim_sprite_count_f3 
+    .byte <entity_anim_sprite_count_f4, <entity_anim_sprite_count_f5, <entity_anim_sprite_count_f2, <entity_anim_sprite_count_f3 
+  entity_anim_frame_sprite_count_addr_hi:
+    .byte >entity_anim_sprite_count_f0, >entity_anim_sprite_count_f1, >entity_anim_sprite_count_f2, >entity_anim_sprite_count_f3 
+    .byte >entity_anim_sprite_count_f4, >entity_anim_sprite_count_f5, >entity_anim_sprite_count_f6, >entity_anim_sprite_count_f7  
+
+;entity_frame_data
+  ;$00 - mini_angel fly (idle, walk, attack)
+  ;$01 - mini_angel hurt
+
+  ;number of frames an animation has
+  entity_anim_frame_count:
+    .byte $01, $02, $04, $03,   $06,   $05
+          ;0    1    2    3      4    5    6    7      8    9    a    b    c    d    e    f
+  entity_anim_meta_sprites_f0:
+    .byte $00, $01, $02, $04, $05,   $08
+  entity_anim_delay_count_f0:
+    .byte $f0, $08, $0a, $07, $0c,   $05
+  entity_anim_sprite_count_f0:
+    .byte $06, $04, $07, $08, $06,   $06
+  entity_anim_palette_f0:
+    .byte $02, $01, $00, $00, $00,   $00
+
+  entity_anim_meta_sprites_f1:
+    .byte $00, $02, $01, $05, $07,   $08
+  entity_anim_delay_count_f1:
+    .byte $00, $10, $0a, $02, $04,   $05
+  entity_anim_sprite_count_f1:
+    .byte $00, $04, $06, $07, $06,   $06
+  entity_anim_palette_f1:
+    .byte $00, $01, $00, $00, $00,   $01
+
+  entity_anim_meta_sprites_f2:
+    .byte $00, $00, $02, $06, $07,   $08
+  entity_anim_delay_count_f2:
+    .byte $00, $ff, $0a, $13, $04,   $05
+  entity_anim_sprite_count_f2:
+    .byte $00, $06, $07, $08, $06,   $06
+  entity_anim_palette_f2:
+    .byte $00, $00, $00, $00, $01,   $00
+
+  entity_anim_meta_sprites_f3:
+    .byte $00, $00, $03, $00, $07,   $08
+  entity_anim_delay_count_f3:
+    .byte $00, $ff, $0a, $00, $04,   $05
+  entity_anim_sprite_count_f3:
+    .byte $00, $00, $06, $08, $00, $06,   $06
+  entity_anim_palette_f3:
+    .byte $00, $00, $00, $00, $00,   $01
     
-  ;   ldy #0
-  ;   lda (curr_entity_data), y
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   lda (curr_entity_data), y
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   lda (curr_entity_data), y     ;sc pos x
-  ;   sta (curr_entity_state), y
-  ;   sta tempX
-  ;   iny
-  ;   lda (curr_entity_data), y     ;sc pos y
-  ;   sta (curr_entity_state), y
-  ;   sta tempY
-  ;   iny
-  ;   lda #0
-  ;   sta (curr_entity_state), y
-  ;   iny
+  entity_anim_meta_sprites_f4:
+    .byte $00, $00, $00, $07,   $08
+  entity_anim_delay_count_f4:
+    .byte $ff, $ff, $00, $04,   $05
+  entity_anim_sprite_count_f4:
+    .byte $06, $08, $00, $06,   $06
+  entity_anim_palette_f4:
+    .byte $00, $00, $00, $01,   $00
 
-  ;   ;store anim data address
-  ;   lda curr_entity_data
-  ;   sta (curr_entity_state), y
-  ;   iny 
-  ;   lda curr_entity_data+1
-  ;   sta (curr_entity_state), y
-  ;   iny
+  entity_anim_meta_sprites_f5:
+    .byte $00, $00, $00, $07,   $04
+  entity_anim_delay_count_f5:
+    .byte $ff, $ff, $00, $13,   $04
+  entity_anim_sprite_count_f5:
+    .byte $06, $08, $00, $06,   $04
+  entity_anim_palette_f5:
+    .byte $00, $00, $00, $00,   $04
 
-  ;   ;anim id
-  ;   lda #0
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   ;x lo
-  ;   lda #0
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   lda tempX
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   ;y lo
-  ;   lda #0
-  ;   sta (curr_entity_state), y
-  ;   iny
-  ;   lda tempY
-  ;   sta (curr_entity_state), y
-  ;   iny
+  entity_anim_meta_sprites_f6:
+    .byte $00, $00, $00, $04,   $04
+  entity_anim_delay_count_f6:
+    .byte $ff, $ff, $00, $04,   $04
+  entity_anim_sprite_count_f6:
+    .byte $06, $08, $00, $04,   $04
+  entity_anim_palette_f6:
+    .byte $00, $00, $00, $04,   $04
+
+  entity_anim_meta_sprites_f7:
+    .byte $00, $00, $00, $04,   $04
+  entity_anim_delay_count_f7:
+    .byte $ff, $ff, $00, $04,   $04
+  entity_anim_sprite_count_f7:
+    .byte $06, $08, $00, $04,   $04
+  entity_anim_palette_f7:
+    .byte $00, $00, $00, $04,   $04
+
+entity_metasprite_index_addr_lo:
+  .byte <entity_meta_sprites_00, <entity_meta_sprites_01, <entity_meta_sprites_02, <entity_meta_sprites_03
+  .byte <entity_meta_sprites_04, <entity_meta_sprites_05, <entity_meta_sprites_06, <entity_meta_sprites_07
+  .byte <entity_meta_sprites_08, <entity_meta_sprites_09
+entity_metasprite_index_addr_hi:
+  .byte >entity_meta_sprites_00, >entity_meta_sprites_01, >entity_meta_sprites_02, >entity_meta_sprites_03
+  .byte >entity_meta_sprites_04, >entity_meta_sprites_05, >entity_meta_sprites_06, >entity_meta_sprites_07
+  .byte >entity_meta_sprites_08, >entity_meta_sprites_09
+
+entity_metasprite_x_offset_addr_lo:
+  .byte <entity_meta_spites_x_offset_00, <entity_meta_spites_x_offset_01, <entity_meta_spites_x_offset_02, <entity_meta_spites_x_offset_03
+  .byte <entity_meta_spites_x_offset_04, <entity_meta_spites_x_offset_05, <entity_meta_spites_x_offset_06, <entity_meta_spites_x_offset_07
+  .byte <entity_meta_spites_x_offset_08, <entity_meta_spites_x_offset_09
+entity_metasprite_x_offset_addr_hi:
+  .byte >entity_meta_spites_x_offset_00, >entity_meta_spites_x_offset_01, >entity_meta_spites_x_offset_02, >entity_meta_spites_x_offset_03 
+  .byte >entity_meta_spites_x_offset_04, >entity_meta_spites_x_offset_05, >entity_meta_spites_x_offset_06, >entity_meta_spites_x_offset_07 
+  .byte >entity_meta_spites_x_offset_08, >entity_meta_spites_x_offset_09
+
+entity_metasprite_y_offset_addr_lo:
+  .byte <entity_meta_spites_y_offset_00, <entity_meta_spites_y_offset_01, <entity_meta_spites_y_offset_02, <entity_meta_spites_y_offset_03 
+  .byte <entity_meta_spites_y_offset_04, <entity_meta_spites_y_offset_05, <entity_meta_spites_y_offset_06, <entity_meta_spites_y_offset_07 
+  .byte <entity_meta_spites_y_offset_08, <entity_meta_spites_y_offset_09
+entity_metasprite_y_offset_addr_hi:
+  .byte >entity_meta_spites_y_offset_00, >entity_meta_spites_y_offset_01, >entity_meta_spites_y_offset_02, >entity_meta_spites_y_offset_03 
+  .byte >entity_meta_spites_y_offset_04, >entity_meta_spites_y_offset_05, >entity_meta_spites_y_offset_06, >entity_meta_spites_y_offset_07
+  .byte >entity_meta_spites_y_offset_08, >entity_meta_spites_y_offset_09
+
+;entity_frame_data
+  ;$00 - rock
+  ;$01 - mini_angel fly f0 (wings_up)
+  ;$02 - mini_angel fly f1 (wings_down)
+
+entity_meta_sprites_index:
+  entity_meta_sprites_00:
+    .byte $67, $65, $85, $02, $00,   $04, $04, $00,   $00,   $0c  
+  entity_meta_spites_x_offset_00:
+    .byte $88, $88, $88, $84, $84,   $84, $84, $84,   $84,   $84
+  entity_meta_spites_y_offset_00:
+    .byte $00, $82, $04, $00, $00,   $00, $00, $00,   $00,   $00
+
+  entity_meta_sprites_01:
+    .byte $68, $66, $86, $03, $01,   $05, $05, $01,   $01,   $0d  
+  entity_meta_spites_x_offset_01:
+    .byte $00, $00, $00, $04, $04,   $04, $04, $04,   $04,   $04
+  entity_meta_spites_y_offset_01:
+    .byte $00, $82, $04, $00, $00,   $00, $00, $00,   $00,   $00
+
+  entity_meta_sprites_02:
+    .byte $77, $75, $95, $12, $10,   $16, $14, $07,   $18,   $1c 
+  entity_meta_spites_x_offset_02:
+    .byte $88, $88, $88, $84, $84,   $84, $84, $84,   $84,   $84
+  entity_meta_spites_y_offset_02:
+    .byte $08, $06, $0c, $08, $08,   $08, $08, $08,   $08,   $08
+
+  entity_meta_sprites_03:
+    .byte $78, $76, $96, $13, $11,   $17, $15, $08,   $19,   $1d  
+  entity_meta_spites_x_offset_03:
+    .byte $00, $00, $00, $04, $04,   $04, $04, $04,   $04,   $04
+  entity_meta_spites_y_offset_03:
+    .byte $08, $06, $0c, $08, $08,   $08, $08, $08,   $08,   $08
+
+
+
+  entity_meta_sprites_04:
+    .byte $87, $20, $24, $22, $20,   $26, $26, $26,   $28,   $2c  
+  entity_meta_spites_x_offset_04:
+    .byte $88, $88, $84, $84, $84,   $84, $84, $84,   $84,   $84
+  entity_meta_spites_y_offset_04:
+    .byte $10, $10, $10, $10, $10,   $10, $10, $10,   $10,   $10
+
+  entity_meta_sprites_05:
+    .byte $88, $21, $25, $23, $21,   $27, $27, $27,   $29,   $2d  
+  entity_meta_spites_x_offset_05:
+    .byte $00, $00, $04, $04, $04,   $04, $04, $04,   $04,   $04
+  entity_meta_spites_y_offset_05:
+    .byte $10, $10, $10, $10, $10,   $10, $10, $10,   $10,   $10
+
+  ;sw 1                               
+  entity_meta_sprites_06:
+    .byte $2a, $ff, $2b, $2a,   $1b, $2b, $0a,   $ff,   $00  
+  entity_meta_spites_x_offset_06:
+    .byte $89, $00, $83, $89,   $0a, $88, $8b,   $ff,   $00    
+  entity_meta_spites_y_offset_06: 
+    .byte $05, $0b, $05, $05,   $00, $02, $0a,   $ff,   $00
+  
+  ;sw 2                              
+  entity_meta_sprites_07:
+    .byte $1a, $ff, $ff, $1a,   $0b, $ff, $09,   $ff,   $00  
+  entity_meta_spites_x_offset_07:
+    .byte $89, $00, $00, $89,   $0a, $87, $93,   $ff,   $00   
+  entity_meta_spites_y_offset_07:
+    .byte $83, $00, $00, $82,   $88, $03, $0a,   $ff,   $00
+
+
+
+  entity_meta_sprites_08:
+    .byte $00, $00, $00, $00
+  entity_meta_spites_x_offset_08:
+    .byte $00
+  entity_meta_spites_y_offset_08:
+    .byte $00
+
+  entity_meta_sprites_09:
+    .byte $00, $00, $00, $00
+  entity_meta_spites_x_offset_09:
+    .byte $00
+  entity_meta_spites_y_offset_09:
+    .byte $00
+

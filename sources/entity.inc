@@ -18,14 +18,19 @@
     entity_invu_time = $03c0
     entity_addr_end = $03cf
     
-
-    curr_entity_index = $00
-
+    ;curr_entity_index = $00
     tempX = $0c
     tempY = $0d
     tempZ = $0e
     tempW = $0f
 
+    min_bg_xpos_scroll = $30
+    sprite_width = $08
+
+    left_screen_limit = $04
+    right_screen_limit = $fd
+    top_floor_limit = $8a
+    bottom_floor_limit = $de
 
 .struct Entity
     type                    .byte
@@ -47,6 +52,7 @@
     enemy_type          = $20
     player_projectile   = $30
     enemy_projectile    = $40
+    environment         = $50
 .endscope
 
 .scope EntityBehaviourType
@@ -54,6 +60,25 @@
     moving_animated     = $01
     static_animated     = $02
     moving_still        = $03
+.endscope
+
+.scope EntityID
+    player         = $00
+    rock           = $01
+    mini_angel     = $02
+    golem          = $03
+    beast          = $04
+    demon          = $05
+    dybbuk         = $06
+    witch          = $07
+    snake          = $08
+
+    leviathan      = $09
+    behemoth       = $0a
+    ziz            = $0b
+    angel          = $0c
+
+    boss           = $80
 .endscope
 
 ;entity state

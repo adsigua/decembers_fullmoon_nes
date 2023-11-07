@@ -7,6 +7,7 @@
   map_pointer:        .res 2
   nametable_pointer:  .res 2      
   attrtable_pointer:  .res 2  
+  tile_test:          .res 1
 
   ;background flags - current state of bg update
   ;x--- ----    there is tile data stored in nametable buffer
@@ -590,6 +591,11 @@
   map_data_addr = $02 ;$03
   pos_x = $04
   pos_y = $05
+  overflow_nt_offset = $06
+  nt2_addr_offset = $07
+
+  lda #0
+  sta overflow_nt_offset
 
   stx pos_x
   sty pos_y
@@ -600,24 +606,58 @@
     txa                   ;move pos_x to accu
     clc
     adc scroll_xoffset    ;add pos x and scroll x
+    sta tempX
+    bcc @no_nt_overflow   ;if offset does go past between nts
+      lda ppu_ctrl_val
+      and #NT_2400
+      beq @not_nt2_overflow
+      ;if there is overflow in nt2 to nt1 (scroll in nt2 but pos in nt1)
+      lda #GETTILE_NT_OVERFLOW
+      sta overflow_nt_offset
+      jmp @nt_overflow_end
+
+      @not_nt2_overflow:
+      ;if there is overflow in nt1 to nt2 (scroll in nt1 but pos in nt2)
+      lda #MAPDATA_NT_OFFSET | GETTILE_NT_OVERFLOW
+      sta overflow_nt_offset
+    @nt_overflow_end:
+    @no_nt_overflow:
+      ;check if at nt2 and no overflow, add nt offset
+      ;(scroll in nt2 pos in nt2)
+      lda ppu_ctrl_val
+      and #NT_2400
+      beq @not_in_nt2
+      bit overflow_nt_offset
+      bmi @there_was_overflow_offset
+      lda #MAPDATA_NT_OFFSET
+      sta overflow_nt_offset
+    @there_was_overflow_offset:
+    @not_in_nt2:
+    lda tempX
     lsr
     lsr
     lsr
     lsr
-    cmp #$20
-    bcc :+                ;if offset does go past nt 2
-      sec
-      sbc #$20
-    :
+    sta tempX 
+    lda overflow_nt_offset
+    and #<~GETTILE_NT_OVERFLOW
+    clc
+    adc tempX
+    ;check if in nt 2
+    ; tax
+    ; lda ppu_ctrl_val
+    ; and #$01
+    ; beq @not_in_nt_2
+    ;   ;check for nt overflow (check if land on nt 1)
+    ;   lda overflow_nt_offset
+    ;   bne @not_in_nt_2
+    ;   @nt_2_only:
+    ;     txa
+    ;     clc
+    ;     adc #$10
+    ;     tax
+    ; @not_in_nt_2:
     tax
-    lda ppu_ctrl_val
-    and #$01
-    beq :+
-      txa
-      clc
-      adc #$10
-      tax
-    :
     lda map_tile_data_col_lo, x
     sta map_data_addr
 
@@ -636,6 +676,7 @@
     lsr
     tay
 
+    ;remove ui 3 rows offset
     dey
     dey
     dey
@@ -643,6 +684,7 @@
     tax
     lda meta_tile_collision_data, x
     sta tempX
+    sta tile_test
       
     lda pos_x
     and #$04      ;check if x is at 0 or 1 column
@@ -738,7 +780,7 @@
 
 
 .segment "RODATA"
-  map_tile_data_col_lo:                 ;||
+  map_tile_data_col_lo:                ;$16
     .byte $00, $0c, $18, $24, $30, $3c, $48, $54,   $60, $6c, $78, $84, $90, $9c, $a8, $b4
     .byte $c0, $cc, $d8, $e4, $f0, $fc, $08, $14,   $20, $2c, $38, $44, $50, $5c, $68, $74
 
@@ -757,7 +799,7 @@
     .byte >level_cave_tile_rle
 
   sprites_palette:
-    .byte $0F,$07,$1B,$37,  $0F,$06,$16,$26,  $0F,$0A,$1A,$2A,  $0F,$02,$12,$22
+    .byte $0F,$07,$1B,$37,  $0F,$06,$16,$26,  $0F,$02,$21,$32,  $0F,$0A,$1A,$2A
 
   level_palettes:
   caves_palette:
@@ -822,6 +864,7 @@
 
     ;$fe = blank
 
+          ;0    1    2    3    4    5    6    7      8    9    a    b    c    d    e    f
   meta_tiles:
   meta_tiles_00:
     .byte $fe, $00, $01, $02, $72, $b2, $40, $36,    $86, $60, $80, $a0, $82, $fe, $b1, $42
@@ -852,8 +895,8 @@
     ;$0b  =   full 3 palette 3
     ;$0c  =   full 2 palette 3
     ;$0d  =   full 1 palette 3
-    ;$0e  =   edge floor slant right
-    ;$0f  =   edge floor slant left
+    ;$0e  =   
+    ;$0f  =   
 
     ;$10  =   floor right
     ;$11  =   floor left
@@ -880,13 +923,14 @@
     ;$24  =   floor blank palette 2 solid
     ;$25  =   floor blank palette 3 solid
 
+          ;0    1    2    3    4    5    6    7      8    9    a    b    c    d    e    f
   meta_tile_index:
     .byte $00, $00, $01, $02, $03, $01, $02, $03,   $01, $02, $03, $01, $02, $03, $00, $00
     .byte $10, $11, $12, $13, $14, $15, $16, $17,   $18, $19, $1a, $1b, $1c, $1d, $1e, $1f
     .byte $0a, $0b, $0c, $09, $00, $00, $09
   meta_tile_collision_data:
     .byte $00, $55, $00, $00, $00, $00, $00, $00,   $00, $00, $00, $00, $00, $00, $00, $00  
-    .byte $00, $00, $00, $00, $55, $55, $00, $00,   $00, $55, $55, $55, $55, $55, $55, $02  
+    .byte $00, $00, $00, $00, $15, $54, $00, $00,   $00, $55, $55, $55, $55, $55, $55, $02  
     .byte $55, $55, $55, $55, $55, $55, $55
   meta_tile_pallete_data: 
     .byte $00, $01, $00, $00, $00, $01, $01, $01,   $02, $02, $02, $03, $03, $03, $00, $00

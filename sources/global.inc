@@ -11,6 +11,11 @@
 
 ;entities.s
 .global init_entities, update_entities, update_oam, get_tile_type
+.global update_entity_oam_buffer, draw_entity_sprite, update_entity_frame_delay_cnt
+
+.global remove_entity_velocity, spawn_monster_entity, apply_pos_x, apply_pos_y
+.globalzp temp_pos_lo, temp_pos_hi
+.globalzp curr_x_offset_addr, curr_y_offset_addr, curr_metasprite_addr
 
 ;player.s
 .global update_player, update_player_entity, init_player_entity
@@ -29,9 +34,9 @@
 .globalzp col_pointer
 
 ;level .s
-.global init_level_manager, init_level, init_player_pos
+.global init_level_manager, init_level, init_player_level_pos
 .global init_scroll, check_update_bg_scroll, update_scroll, apply_scroll_x
-.globalzp level_index, level_flags, scroll_x
+.globalzp level_index, level_flags, scroll_x, scroll_x_delta
 
 
 

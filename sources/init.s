@@ -6,6 +6,9 @@
   ; The very first thing to do when powering on is to put all sources
   ; of interrupts into a known state.
 
+  ;lda #<~GETTILE_NT_OVERFLOW
+
+
   sei		; disable IRQs
   cld		; disable decimal mode
   ldx PPUCTRL

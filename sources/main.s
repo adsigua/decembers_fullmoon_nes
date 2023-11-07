@@ -58,6 +58,7 @@ ppu_mask_val:   .res 1
   jsr draw_bg
 
   jsr init_entities
+  jsr init_level
   jsr init_scroll
 
   jsr ppu_screen_on
