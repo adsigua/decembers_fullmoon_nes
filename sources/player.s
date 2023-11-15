@@ -298,7 +298,7 @@ player_invu_time = $38
   jsr update_player_velocity
   jsr update_player_invu_state
   jsr update_player_animation
-  jsr update_player_oam_buffer
+  ;jsr update_player_oam_buffer
   rts
 .endproc
 
@@ -612,30 +612,61 @@ player_invu_time = $38
   rts
 .endproc
 
-.proc update_player_oam_buffer
+; .proc update_player_oam_buffer
+  ;   curr_entity_xpos = $00
+  ;   curr_entity_ypos= $01
+  ;   curr_entity_state = $02
+  ;   entity_meta_sprite_index = $03
+  ;   sprite_count = $04
+  ;   pallete_index = $05
+  ;   curr_sprite_index = $06
+  ;   tempAddr_lo = tempX
+  ;   tempAddr_hi = tempX+1
+
+  ;   lda entity_pos_x
+  ;   sta curr_entity_xpos
+  ;   lda entity_pos_y
+  ;   sta curr_entity_ypos
+  ;   lda entity_state
+  ;   sta curr_entity_state
+
+  ;   ldx entity_anim_frame_id
+  ;   ldy entity_anim_id
+
+
+  ;   ;sprite number
+  ;   ldx sprite_count
+  ;   dex
+  ;   ;stx curr_sprite_index
+
+  ;   @draw_entity_loop:
+      
+
+  ;     jsr draw_entity_sprite
+  ;   @place_buffer_to_oam:
+  ;     jsr update_oam_buffer
+  ;     dex 
+  ;     ;stx curr_sprite_index
+  ;     bpl @draw_entity_loop
+
+  ;   @end_player_oam_buffer:
+  ;     rts
+  ; .endproc
+
+;x = frame index of anim
+.proc load_player_metasprite_data
   curr_entity_xpos = $00
   curr_entity_ypos= $01
   curr_entity_state = $02
   entity_meta_sprite_index = $03
   sprite_count = $04
   pallete_index = $05
-  curr_sprite_index = $06
   tempAddr_lo = tempX
   tempAddr_hi = tempX+1
-
-  lda entity_pos_x
-  sta curr_entity_xpos
-  lda entity_pos_y
-  sta curr_entity_ypos
-  lda entity_state
-  sta curr_entity_state
-
-  ldx entity_anim_frame_id
-  ldy entity_anim_id
-
-  lda player_anim_frame_palette_addr_lo, X
+  
+  lda player_anim_frame_palette_addr_lo, x
   sta tempAddr_lo
-  lda player_anim_frame_palette_addr_hi, X
+  lda player_anim_frame_palette_addr_hi, x
   sta tempAddr_hi
 
   lda (tempAddr_lo), y
@@ -656,37 +687,25 @@ player_invu_time = $38
 
   lda (tempAddr_lo), y
   sta sprite_count
+  rts
+.endproc
+;x = sprite index in meta sprite
+.proc load_player_metasprites_addresses
+  lda player_metasprite_y_offset_addr_lo, x
+  sta curr_y_offset_addr
+  lda player_metasprite_y_offset_addr_hi, x
+  sta curr_y_offset_addr+1
+  
+  lda player_metasprite_index_addr_lo, x
+  sta curr_metasprite_addr
+  lda player_metasprite_index_addr_hi, x
+  sta curr_metasprite_addr+1
 
-  ;sprite number
-  ldx sprite_count
-  dex
-  ;stx curr_sprite_index
-
-  @draw_entity_loop:
-    lda player_metasprite_y_offset_addr_lo, x
-    sta curr_y_offset_addr
-    lda player_metasprite_y_offset_addr_hi, x
-    sta curr_y_offset_addr+1
-    
-    lda player_metasprite_index_addr_lo, x
-    sta curr_metasprite_addr
-    lda player_metasprite_index_addr_hi, x
-    sta curr_metasprite_addr+1
-
-    lda player_metasprite_x_offset_addr_lo, x
-    sta curr_x_offset_addr
-    lda player_metasprite_x_offset_addr_hi, x
-    sta curr_x_offset_addr+1
-
-    jsr draw_entity_sprite
-  @place_buffer_to_oam:
-    jsr update_oam_buffer
-    dex 
-    ;stx curr_sprite_index
-    bpl @draw_entity_loop
-
-  @end_player_oam_buffer:
-    rts
+  lda player_metasprite_x_offset_addr_lo, x
+  sta curr_x_offset_addr
+  lda player_metasprite_x_offset_addr_hi, x
+  sta curr_x_offset_addr+1
+  rts
 .endproc
 
 .segment "RODATA"

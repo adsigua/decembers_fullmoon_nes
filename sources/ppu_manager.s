@@ -2,7 +2,8 @@
 .include "global.inc"
 
 .segment "ZEROPAGE"
-  oam_counter:  .res 2
+  oam_base:  .res 1
+  oam_counter:  .res 1
   oam_buffer:   .res 4
 .segment "CODE"
   sprite_0_index = $09
@@ -21,22 +22,20 @@ loop:
   inx
   inx
   bne loop
-
   rts
 .endproc
 
 ; The first entry in OAM_RAM (indices 0-3) is "sprite 0".
 ;x = x pos   |   y = y pos
 .proc place_sprite_0
+  ldx #$f8
+  ldy #$28
   sty OAM_RAM
   lda #sprite_0_index
   sta OAM_RAM+1
   lda #SpriteAttrib::BGPriority
   sta OAM_RAM+2
   stx OAM_RAM+3
-
-  lda #4
-  sta oam_counter
   rts
 .endproc
 
@@ -52,6 +51,7 @@ loop:
 
 .proc update_oam_buffer
   ldy oam_counter
+
   lda oam_buffer
   sta OAM_RAM, y          
 
@@ -64,10 +64,17 @@ loop:
   lda oam_buffer+3
   sta OAM_RAM+3, y      
 
-  inc oam_counter
-  inc oam_counter
-  inc oam_counter
-  inc oam_counter
+  lda oam_counter
+  clc
+  adc #04
+  bcc :+
+    lda #04
+  :
+  sta oam_counter
+  ; inc oam_counter
+  ; inc oam_counter
+  ; inc oam_counter
+  ; inc oam_counter
   rts
 .endproc
 

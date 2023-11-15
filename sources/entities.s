@@ -3,14 +3,16 @@
 .include "entity.inc"
 
 .segment "ZEROPAGE"
-  entity_count:         .res 1
-  curr_entity_index:    .res 1
-  temp_pos_hi:          .res 1
-  temp_pos_lo:          .res 1
-  curr_x_offset_addr:   .res 2
-  curr_y_offset_addr:   .res 2
-  curr_metasprite_addr: .res 2
-  curr_entity_id:       .res 1
+  entity_count:           .res 1
+  curr_entity_index:      .res 1
+  entity_cycle_offset:    .res 1
+  entity_prime_cycle_index: .res 1
+  temp_pos_hi:            .res 1
+  temp_pos_lo:            .res 1
+  curr_x_offset_addr:     .res 2
+  curr_y_offset_addr:     .res 2
+  curr_metasprite_addr:   .res 2
+  curr_entity_id:         .res 1
 
 MAX_ENTITY_COUNT = $10
 
@@ -55,13 +57,31 @@ MAX_ENTITY_COUNT = $10
 .proc spawn_monster_entity
   posX = tempX
   posY = tempY
+  temp_id = tempZ
 
   ldx entity_count
   cpx #MAX_ENTITY_COUNT
   beq @no_spawn
 
-  tya
-  sta entity_id, x
+  sty temp_id
+
+  ;find space in entity address where entity type is blank or zero
+  ldy #1
+  @find_entity_index_loop:
+    lda entity_type, y
+    beq @store_index_to_entity_stack
+    iny
+    jmp @find_entity_index_loop
+
+  @store_index_to_entity_stack:  
+    ;x = entity_count
+    ;y = entity index
+    tya
+    sta entity_stack, x
+    inc entity_count
+    ldy temp_id
+    tya
+    sta entity_id, x
 
   lda #0
   sta entity_anim_delay_cnt, x
@@ -85,7 +105,6 @@ MAX_ENTITY_COUNT = $10
   lda posY
   sta entity_pos_y, x
 
-  inc entity_count
 
   @no_spawn:
   rts
@@ -93,8 +112,13 @@ MAX_ENTITY_COUNT = $10
 
 .proc update_entities
   ldx #0
-  stx curr_entity_index
   @update_entity_loop:
+    txa
+    pha
+    lda entity_stack, x
+    tax
+    stx curr_entity_index
+
     lda entity_type, x
     and #$0f
     beq @no_update
@@ -114,15 +138,25 @@ MAX_ENTITY_COUNT = $10
       jsr update_nonplayer_entity
       
     @no_update:
-    inc curr_entity_index
-    ldx curr_entity_index
+    pla
+    tax
+    inx
     cpx entity_count
     bne @update_entity_loop
   rts
 .endproc
 
-.proc update_nonplayer_entity
+;x = entity_index
+.proc destroy_entity
+  lda #0
+  sta entity_type, x
+                 
 
+  @end_destroy_entity:
+    rts
+.endproc
+
+.proc update_nonplayer_entity
   lda entity_type, x 
   and #$0f          
   cmp #EntityBehaviourType::static_animated
@@ -130,7 +164,6 @@ MAX_ENTITY_COUNT = $10
   cmp #EntityBehaviourType::moving_animated
   beq @update_animated
   @update_static:
-    jsr update_entity_oam_buffer
     jsr update_static_pos
     jmp @end_update_nonplayer_entity
 
@@ -140,7 +173,7 @@ MAX_ENTITY_COUNT = $10
   @update_animated:
     jsr update_entity_animation
     jsr update_static_pos
-    jsr update_entity_oam_buffer
+    ;jsr update_entity_oam_buffer
 
   @end_update_nonplayer_entity:
     rts
@@ -175,7 +208,9 @@ MAX_ENTITY_COUNT = $10
     jmp @end_anim_check
 
   @state_change_anim:
-    ldy entity_anim_id, x
+    lda curr_entity_state
+    and #$0f
+    tay
     lda entity_anim_frame_count, y
     cmp #1
     beq @end_anim_check
@@ -363,19 +398,49 @@ MAX_ENTITY_COUNT = $10
   rts
 .endproc
 
-.proc update_entity_oam_buffer
+.proc entity_cycle_index_add
+  prime_add_list_count = $07
+
+  inc entity_prime_cycle_index
+	lda entity_prime_cycle_index
+	and #prime_add_list_count
+	sta entity_prime_cycle_index
+	tax
+	lda entity_cycle_add_prime, x
+	sta entity_cycle_offset
+	rts
+.endproc 
+
+.proc draw_entities
+  jsr entity_cycle_index_add
+  lda #0
+	:
+    sta curr_entity_index
+    pha
+    tax
+    lda entity_type, x
+    beq @skip_draw      ;if none-type skip
+    jsr draw_entity
+    @skip_draw:
+    pla
+    clc
+    adc entity_cycle_offset
+    and #15
+    bne :-
+	rts
+.endproc
+
+;x = entity index
+.proc draw_entity
   curr_entity_xpos = $00
   curr_entity_ypos= $01
   curr_entity_state = $02
   entity_meta_sprite_index = $03
   sprite_count = $04
   pallete_index = $05
-  curr_frame_id = $06
-  curr_entity_id = $07
   tempAddr_lo = tempX
   tempAddr_hi = tempX+1
 
-  ldx curr_entity_index
   lda entity_pos_x, x
   sta curr_entity_xpos
   lda entity_pos_y, x
@@ -383,12 +448,59 @@ MAX_ENTITY_COUNT = $10
   lda entity_state, x
   sta curr_entity_state
 
+  ldy entity_anim_id, x
   lda entity_anim_frame_id, x
-  sta curr_frame_id
-  lda entity_anim_id, x
-  tay
-  ldx curr_frame_id
+  tax
 
+  lda curr_entity_index
+  bne @load_nonplayer_data 
+
+  @load_player_data:
+    jsr load_player_metasprite_data
+    jmp @draw_meta_sprite
+
+  @load_nonplayer_data:
+    jsr load_nonplayer_metasprite_data
+
+  @draw_meta_sprite:
+    ;sprite number
+    ldx #0
+    @draw_entity_loop:
+      txa
+      pha
+      
+
+      lda curr_entity_index
+      bne @load_nonplayer_addr 
+        jsr load_player_metasprites_addresses
+        jmp @draw_ent_spr
+      @load_nonplayer_addr:
+        jsr load_nonplayer_metasprites_addresses
+      @draw_ent_spr:      
+        jsr draw_entity_sprite
+    @place_buffer_to_oam:
+      jsr update_oam_buffer
+      pla
+      tax
+      inx
+      cpx sprite_count
+      bne @draw_entity_loop
+
+  @end_entity_oam_buffer:
+    rts
+.endproc
+
+;x = frame index of anim
+.proc load_nonplayer_metasprite_data
+  curr_entity_xpos = $00
+  curr_entity_ypos= $01
+  curr_entity_state = $02
+  entity_meta_sprite_index = $03
+  sprite_count = $04
+  pallete_index = $05
+  tempAddr_lo = tempX
+  tempAddr_hi = tempX+1
+  
   lda entity_anim_frame_palette_addr_lo, X
   sta tempAddr_lo
   lda entity_anim_frame_palette_addr_hi, X
@@ -412,35 +524,26 @@ MAX_ENTITY_COUNT = $10
 
   lda (tempAddr_lo), y
   sta sprite_count
+  rts
+.endproc
 
-  ;sprite number
-  ldx #0
+;x = sprite index in meta-sprite
+.proc load_nonplayer_metasprites_addresses
+  lda entity_metasprite_y_offset_addr_lo, x
+  sta curr_y_offset_addr
+  lda entity_metasprite_y_offset_addr_hi, x
+  sta curr_y_offset_addr+1
+  
+  lda entity_metasprite_index_addr_lo, x
+  sta curr_metasprite_addr
+  lda entity_metasprite_index_addr_hi, x
+  sta curr_metasprite_addr+1
 
-  @draw_entity_loop:
-    lda entity_metasprite_y_offset_addr_lo, x
-    sta curr_y_offset_addr
-    lda entity_metasprite_y_offset_addr_hi, x
-    sta curr_y_offset_addr+1
-    
-    lda entity_metasprite_index_addr_lo, x
-    sta curr_metasprite_addr
-    lda entity_metasprite_index_addr_hi, x
-    sta curr_metasprite_addr+1
-
-    lda entity_metasprite_x_offset_addr_lo, x
-    sta curr_x_offset_addr
-    lda entity_metasprite_x_offset_addr_hi, x
-    sta curr_x_offset_addr+1
-
-    jsr draw_entity_sprite
-  @place_buffer_to_oam:
-    jsr update_oam_buffer
-    inx
-    cpx sprite_count
-    bne @draw_entity_loop
-
-  @end_entity_oam_buffer:
-    rts
+  lda entity_metasprite_x_offset_addr_lo, x
+  sta curr_x_offset_addr
+  lda entity_metasprite_x_offset_addr_hi, x
+  sta curr_x_offset_addr+1
+  rts
 .endproc
 
 ;x = sprite in
@@ -531,11 +634,11 @@ MAX_ENTITY_COUNT = $10
 
 
 .segment "RODATA"
+entity_cycle_add_prime: .byte 1, 5, 11, 15, 7, 3, 13, 9
 
 ;entity ids
   ;$00 - rock
   ;$01 - mini angel
-
 entity_data:
   entity_data_type:
     .byte $53, $21

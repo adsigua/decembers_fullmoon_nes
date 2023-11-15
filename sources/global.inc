@@ -10,35 +10,38 @@
 .globalzp ppu_ctrl_val, ppu_mask_val
 
 ;entities.s
-.global init_entities, update_entities, update_oam, get_tile_type
+.global init_entities, update_entities, update_oam, entity_cycle_index_add, draw_entities
 .global update_entity_oam_buffer, draw_entity_sprite, update_entity_frame_delay_cnt
 
 .global remove_entity_velocity, spawn_monster_entity, apply_pos_x, apply_pos_y
-.globalzp temp_pos_lo, temp_pos_hi
+.globalzp temp_pos_lo, temp_pos_hi, entity_cycle_offset
 .globalzp curr_x_offset_addr, curr_y_offset_addr, curr_metasprite_addr
 
 ;player.s
 .global update_player, update_player_entity, init_player_entity
+.global load_player_metasprite_data, load_player_metasprites_addresses
 
 ; ppu
 .global ppu_clear_nt, ppu_clear_oam, ppu_screen_on
 .global update_oam_buffer, send_oam_dma, place_sprite_0
-.globalzp oam_counter, oam_buffer
+.globalzp oam_base, oam_counter, oam_buffer
 
 ; pads.s
 .global read_pads
 .globalzp cur_keys, new_keys
 
-;bg .s
-.global draw_bg, update_column, draw_column
+;bg.s
+.global draw_bg, update_column, draw_column, get_tile_type
 .globalzp col_pointer
 
-;level .s
+;level.s
 .global init_level_manager, init_level, init_player_level_pos
 .global init_scroll, check_update_bg_scroll, update_scroll, apply_scroll_x
 .globalzp level_index, level_flags, scroll_x, scroll_x_delta
 
-
+;util.s
+.global generate_random_seed
+.globalzp random_seed
 
 
 

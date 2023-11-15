@@ -271,9 +271,9 @@
   level_encounter_entity_count:
     .byte $03
   level_encounter_scroll_spawn_pos:
-    .byte $02
+    .byte $03
   level_encounter_scroll_start_pos:
-    .byte $05
+    .byte $06
 
 
   level_encounter_entity_id_addr_lo:
@@ -309,10 +309,10 @@
   level_encounter_entity_spawn_pos_x_00:
     .byte $a0, $00, $00, $00
   level_encounter_entity_spawn_pos_y_00:
-    .byte $98, $00, $00, $00
+    .byte $a8, $00, $00, $00
 
   level_encounter_entity_id_01:
-    .byte $01, $00, $00, $00
+    .byte $00, $00, $00, $00
   level_encounter_entity_spawn_pos_x_01:
     .byte $d2, $00, $00, $00
   level_encounter_entity_spawn_pos_y_01:
@@ -323,7 +323,7 @@
   level_encounter_entity_spawn_pos_x_02:
     .byte $b0, $00, $00, $00
   level_encounter_entity_spawn_pos_y_02:
-    .byte $c0, $00, $00, $00
+    .byte $a8, $00, $00, $00
 
   level_encounter_entity_id_03:
     .byte $00, $00, $00, $00

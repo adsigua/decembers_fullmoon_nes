@@ -2,7 +2,7 @@
 .define ENTITY_INC
 
 ;entity addresses======================================================
-    entity_addr = $300
+    entity_addr = $0300
     entity_type = $0300
     entity_state = $0310
     entity_id = $0320
@@ -11,12 +11,14 @@
     entity_anim_delay_cnt = $0350
     entity_pos_x = $0360
     entity_pos_y = $0370
-    entity_velocity_x = $0380
-    entity_velocity_y = $0390
-    entity_pos_x_lo = $03a0
-    entity_pos_y_lo = $03b0
-    entity_invu_time = $03c0
-    entity_addr_end = $03cf
+    entity_level_pos_x = $0380
+    entity_velocity_x = $0390
+    entity_velocity_y = $03a0
+    entity_pos_x_lo = $03b0
+    entity_pos_y_lo = $03c0
+    entity_invu_time = $03d0
+    entity_stack = $03e0
+    entity_addr_end = $03ef
     
     ;curr_entity_index = $00
     tempX = $0c

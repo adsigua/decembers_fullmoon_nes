@@ -63,18 +63,22 @@ ppu_mask_val:   .res 1
 
   jsr ppu_screen_on
 
+  ;lda #4
+  ;sta oam_base
+
   @game_loop:
     jsr ppu_clear_oam
     jsr read_pads
     
-    ldx #$f8
-    ldy #$28
     jsr place_sprite_0
 
+    ;lda #0
+    ;sta oam_counter
 
     ;do updating player updates
     jsr update_player
     jsr update_entities
+    jsr draw_entities
     jsr check_update_bg_scroll
 
   lda nmi_count
